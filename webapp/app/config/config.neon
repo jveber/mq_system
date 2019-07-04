@@ -1,0 +1,41 @@
+#
+# SECURITY WARNING: it is CRITICAL that this file & directory are NOT accessible directly via a web browser!
+# https://nette.org/security-warning
+#
+php:
+    date.timezone: Europe/Prague #change this if you want
+
+database:
+    database:
+        dsn: 'sqlite:/var/db/mq_system.db'
+        debugger: true
+        explain: true
+        autowired: true
+    log:
+        dsn: 'sqlite:/var/db/mq_log.db'
+        debugger: true
+        explain: true
+    script:
+        dsn: 'sqlite:/var/db/mq_exe_system.db'
+        debugger: true
+        explain: true
+
+security:
+    users:
+        jvr: 'c16cce510a5a974ef60f1c6dagb7ea141a569d26a9951675396a5cec6b4e70e12559f978389056dc44ee7c2c4b85eb7532e883ee4819b9064642de7089707e9' # remove this one it's just an example
+
+application:
+    errorPresenter: Error
+    mapping:
+        *: App\Presenters\*Presenter
+
+session:
+    expiration: 14 days
+
+services:
+    router: App\RouterFactory::createRouter
+    - App\Presenters\HomepagePresenter(@database.database.context, @database.log.context, @database.script.context)
+    - App\Presenters\ExePresenter(@database.script.context, @database.log.context)
+
+extensions:
+    tbDatePicker: RadekDostal\NetteComponents\DateTimePicker\DateTimePicker\DI\DateTimePickerExtension

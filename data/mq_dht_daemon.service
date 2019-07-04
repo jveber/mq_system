@@ -1,0 +1,11 @@
+[Unit]
+Description=MQ System DHT Daemon
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mq_dht_daemon
+
+
+[Install]
+WantedBy=multi-user.target

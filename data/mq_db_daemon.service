@@ -1,0 +1,10 @@
+[Unit]
+Description=MQ System Database Daemon
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mq_db_daemon
+
+[Install]
+WantedBy=multi-user.target

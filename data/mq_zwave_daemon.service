@@ -1,0 +1,11 @@
+[Unit]
+Description=MQ System Z-Wave Daemon
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mq_zwave_daemon
+
+
+[Install]
+WantedBy=multi-user.target

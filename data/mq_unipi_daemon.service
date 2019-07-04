@@ -1,0 +1,11 @@
+[Unit]
+Description=MQ System UniPi Daemon
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mq_unipi_daemon
+
+
+[Install]
+WantedBy=multi-user.target

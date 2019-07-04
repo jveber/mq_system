@@ -1,0 +1,11 @@
+[Unit]
+Description=MQ System Excution Daemon
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mq_exe_daemon
+
+
+[Install]
+WantedBy=multi-user.target

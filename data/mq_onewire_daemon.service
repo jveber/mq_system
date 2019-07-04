@@ -1,0 +1,11 @@
+[Unit]
+Description=MQ System 1-Wire Daemon
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mq_onewire_daemon
+
+
+[Install]
+WantedBy=multi-user.target
