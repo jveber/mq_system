@@ -18,26 +18,26 @@ if (${IPO_SUPPORTED})
 endif()
 
 install(TARGETS ${target} RUNTIME DESTINATION /usr/local/bin)
-if (DAEMON_MANAGER STREQUAL OpenRC)
+if (DAEMON_MANAGER EQUAL 1)
     install(FILES ${CMAKE_SOURCE_DIR}/data/${target} PERMISSIONS WORLD_EXECUTE DESTINATION /etc/init.d/ )
-elseif (DAEMON_MANAGER STREQUAL systemd)
+elseif (DAEMON_MANAGER EQUAL 2)
     install(FILES ${CMAKE_SOURCE_DIR}/data/${target}.service PERMISSIONS WORLD_READ DESTINATION /usr/lib/systemd/system/ )
 else()
     message(SEND_ERROR "Unsupported deamon manager")  # this should never happen
 endif()
 install(FILES ${CMAKE_SOURCE_DIR}/data/${target}.conf DESTINATION /etc/mq_system/ )
 cotire(${target}) #speed up if possible using cotire
-if (DAEMON_MANAGER STREQUAL OpenRC)
+if (DAEMON_MANAGER EQUAL 1)
     add_custom_target(uninstall_${target}
-	    COMMAND rm /usr/local/bin/${target}
-        COMMAND rm /etc/init.d/${target}
-        COMMAND rm /etc/mq_system/${target}.conf
+	    COMMAND rm -f /usr/local/bin/${target}
+        COMMAND rm -f /etc/init.d/${target}
+        COMMAND rm -f /etc/mq_system/${target}.conf
     )
-elseif (DAEMON_MANAGER STREQUAL systemd)
+elseif (DAEMON_MANAGER EQUAL 2)
     add_custom_target(uninstall_${target}
-	    COMMAND rm /usr/local/bin/${target}
-        COMMAND rm /usr/lib/systemd/system/${target}.service
-        COMMAND rm /etc/mq_system/${target}.conf
+	    COMMAND rm -f /usr/local/bin/${target}
+        COMMAND rm -f /usr/lib/systemd/system/${target}.service
+        COMMAND rm -f /etc/mq_system/${target}.conf
     )
 else()
     message(SEND_ERROR "Unsupported deamon manager")  # this should never happen

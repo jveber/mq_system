@@ -27,9 +27,7 @@
 #include <vector>                   // for storing sensor information
 #include <stdexcept>                // exceptions
 #include <thread>                   // sleep_for
-
-#include <linux/sched.h>    //REMOVE
-#include <sys/resource.h>   //REMOVE
+#include <memory>
 
 using namespace MQ_System;
 using namespace libconfig;
@@ -60,15 +58,17 @@ class DHT_Service : public Daemon {
 #ifdef pigpio_FOUND
     int _pigpio_handle;
 #else
-    gpiocxx* _chip;
+    std::unique_ptr<gpiocxx> _chip;
 #endif
 };
 
-#ifdef pigpio_FOUND
-DHT_Service::DHT_Service(): Daemon("mq_dht_daemon", "/var/run/mq_dht_daemon.pid"), _pigpio_handle(-1) {}
-#else
-DHT_Service::DHT_Service(): Daemon("mq_dht_daemon", "/var/run/mq_dht_daemon.pid"), _chip(nullptr) {}
+
+DHT_Service::DHT_Service(): Daemon("mq_dht_daemon", "/var/run/mq_dht_daemon.pid")
+#ifdef pigpio_FOUND 
+    , _pigpio_handle(-1)
 #endif
+{}
+
 
 void DHT_Service::load_daemon_configuration() {
     static const char* config_file = "/etc/mq_system/mq_dht_daemon.conf";	
@@ -136,8 +136,8 @@ void DHT_Service::read_sensors()
             throw std::runtime_error("");
         }
 #else
-        if (_chip == nullptr)
-            _chip = new gpiocxx("/dev/gpiochip0", _logger);
+        if (!_chip)
+            _chip.reset(new gpiocxx("/dev/gpiochip0", _logger));  // C++11 does not offer "std::make_unique<gpiocxx>("/dev/gpiochip0", _logger);" ...
         _logger->debug("Chip initialized");
 #endif
 
@@ -350,22 +350,22 @@ DHT_Service::~DHT_Service() noexcept {
 
 int DHT_Service::read_sensor_data(int id, float& humidity, float& temperature) noexcept {
     std::vector<std::pair<decltype(std::chrono::steady_clock::now()), decltype(_chip->get_value(id))>> pairs;
-    decltype(std::chrono::steady_clock::now().time_since_epoch().count()) cMaxTime = 200 + 40 * 130 + 500; // start + 40 * 1-bit + reserve
+    static constexpr decltype(std::chrono::steady_clock::now().time_since_epoch().count()) kMaxTime = 200 + 40 * 130 + 500; // start (200ms) + 40 (ms) * 1-bit (130ms) + reserve (500ms)
 
     _chip->set_value(id, 0);
     std::this_thread::sleep_for(std::chrono::milliseconds(18));
-    auto begin = std::chrono::steady_clock::now();
+    const auto begin = std::chrono::steady_clock::now();
     pairs.reserve(1500);
     pairs.emplace_back(begin, true);
 
     _chip->set_value(id, 1);
     // I really wanted to use event interface of GPIO, but setting pin from "output" to "input watching events" took on my RPi3 ~450us. 
     // Since I have ~200us before sensor sends required data to input... I was loosing 2-3 bits of data; thus I was
-    // forced to use following approach...
+    // forced to use following approach... it may not work well if the system is under heavy load..
     for (int i = 0; i < 20000; ++i) {
-        auto now = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
         pairs.emplace_back(now, _chip->get_value(id)); // first value request gonna request change of pin direction, that might take some time.~100 - 200us. Rest is taking 3-10us so the accuracy is sufficent. 
-        if (((now - begin).count() / 1000) > cMaxTime)
+        if (((now - begin).count() / 1000) > kMaxTime)
             break;
     }
     _chip->set_value(id, 1);
@@ -409,7 +409,7 @@ int DHT_Service::read_sensor_data(int id, float& humidity, float& temperature) n
     }
     auto last_edge_time = *edges.begin();
     for (auto&& edge : edges) {
-        auto interval = (edge - last_edge_time).count() / 1000;
+        const auto interval = (edge - last_edge_time).count() / 1000;
         _logger->debug("Falling adge - Time {} us", interval);
         last_edge_time = edge;
         if (interval != 0) {
@@ -458,18 +458,14 @@ int DHT_Service::read_sensor_data(int id, float& humidity, float& temperature) n
 }
 
 DHT_Service::~DHT_Service() noexcept {
-    if (_chip != nullptr)
-        delete _chip;
-    _chip = nullptr;
     _logger->debug("~DHT_Service()");
 }
 #endif /* pigpio_FOUND */
 
 int main() {
     try {
-        DHT_Service* d = new DHT_Service();
-        d->main();
-        delete d;
+        DHT_Service d;  //explicit destruction on signal is possible but it does not delete pointer now...!
+        d.main();
     } catch (const std::runtime_error& error) {
         return -1;
     }

@@ -7,5 +7,5 @@ command_args=""
 pidfile="/var/run/mq_onewire_daemon.pid"
 
 depend() {
- use net pigpiod mosquitto
+ use net mosquitto
 }

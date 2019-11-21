@@ -41,10 +41,10 @@ class db_sink : public spdlog::sinks::base_sink<spdlog::details::null_mutex>
     sqlite3_bind_int64(_stmt, 1, static_cast<sqlite3_int64>(secs));
     sqlite3_bind_int(_stmt, 2, static_cast<int>(msg.level));
     sqlite3_bind_int64(_stmt, 3, static_cast<sqlite3_int64>(msg.thread_id));
-    sqlite3_bind_int64(_stmt, 4, static_cast<sqlite3_int64>(msg.msg_id));
-    fmt::memory_buffer formatted;
-    sink::formatter_->format(msg, formatted);
-    sqlite3_bind_text(_stmt, 5, msg.logger_name->c_str(), msg.logger_name->size(), SQLITE_STATIC);
+    sqlite3_bind_int64(_stmt, 4, static_cast<sqlite3_int64>(0));  // msq_id was removed
+    spdlog::memory_buf_t formatted;
+    spdlog::sinks::base_sink<spdlog::details::null_mutex>::formatter_->format(msg, formatted);
+    sqlite3_bind_text(_stmt, 5, msg.logger_name.data(), msg.logger_name.size(), SQLITE_STATIC);
     sqlite3_bind_text(_stmt, 6, formatted.data(), formatted.size(), SQLITE_STATIC);
     sqlite3_step(_stmt);
     sqlite3_reset(_stmt);

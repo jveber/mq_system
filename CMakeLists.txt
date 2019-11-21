@@ -20,10 +20,14 @@ cmake_policy(SET CMP0069 NEW) # INTERPROCEDURAL_OPTIMIZATION is enforced when en
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 include(GenerateExportHeader)
+enable_language(C CXX)
 include(CheckIPOSupported)
-check_ipo_supported(RESULT IPO_SUPPORTED)
+check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_INFO)
+
+message(STATUS "Using IPO ${IPO_SUPPORTED} info ${IPO_INFO}")
+
 include(CMakeDependentOption)
-message(STATUS "Using IPO ${IPO_SUPPORTED}")
+
 
 
 set(WriterCompilerDetectionHeaderFound NOTFOUND)
@@ -80,13 +84,46 @@ file(WRITE "${PROJECT_BINARY_DIR}/VERSION" "${META_NAME_VERSION}")
 
 # Compiler settings and options 
 include(cmake/CompileOptions.cmake)
-set(CMAKE_C_FLAGS "-Wall -Wextra -Wno-psabi -pipe")
-set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -Wno-reorder -Wno-unused -fno-strict-aliasing")
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -O0 -g")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O2 -ftree-vectorize") 
-set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS} -O0 -g")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS} -O2 -ftree-vectorize") 
+set(CMAKE_C_FLAGS "-fpie -Wl,-pie -Wall -Wextra -pipe -fno-common  -fno-plt ")
+set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS}")
+set(C_RELEASE_FLAGS "-DNDEBUG -O2  -Wno-unused -fasynchronous-unwind-tables -fno-semantic-interposition -fstack-clash-protection -fstack-protector-strong -fipa-pta -fdevirtualize-at-ltrans -ftree-vectorize -Wno-reorder -fgraphite-identity -floop-nest-optimize -ftree-loop-distribution -fstrict-aliasing")
+# -fsanitize=memory -fsanitize-memory-track-origins -fsanitize=thread -fsanitize=undefined -fsanitize=float-cast-overflow -fsanitize=pointer-compare -fsanitize=float-divide-by-zero -fsanitize=pointer-subtract -D_GLIBCXX_SANITIZE_VECTOR -fsanitize-address-use-after-scope -U_FORTIFY_SOURCE -Wdouble-promotion -Wno-psabi -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Wnull-dereference -Werror=format-security -Werror=implicit-function-declaration -U_FORTIFY_SOURCE -fsanitize=address
+# -fsanitize=thread -fsanitize=memory -fsanitize-memory-track-origins
+string(CONCAT C_DEBUG_FLAGS "-O0 -g3 -fno-omit-frame-pointer -Wpedantic -fexceptions -fsanitize-recover=all -Wl,-z,defs -Wl,-z,now -Wl,-z,relro -Wformat=2 -fno-strict-aliasing -Wstrict-aliasing=2"
+" -fsanitize=address"
+" -fsanitize-address-use-after-scope"
+" -fsanitize=bool"
+" -fsanitize=bounds"
+" -fsanitize=bounds-strict"
+" -fsanitize=builtin"
+" -fsanitize=enum"
+" -fsanitize=float-cast-overflow"
+" -fsanitize=float-divide-by-zero"
+" -fsanitize=integer-divide-by-zero"
+" -fsanitize=nonnull-attribute"
+" -fsanitize=null"
+" -fsanitize=object-size"
+" -fsanitize=pointer-compare"
+" -fsanitize=pointer-subtract"
+" -fsanitize=pointer-overflow"
+" -fsanitize=return"
+" -fsanitize=shift"
+" -fsanitize=shift-exponent"
+" -fsanitize=shift-base"
+" -fsanitize=signed-integer-overflow"
+" -fsanitize=undefined"
+" -fsanitize=unreachable"
+" -fsanitize=vla-bound"
+" -fsanitize=vptr"
+" -D_GLIBCXX_SANITIZE_VECTOR -Wdouble-promotion -Wno-psabi -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Wnull-dereference -Werror=format-security -Werror=implicit-function-declaration")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} ${C_DEBUG_FLAGS}")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} ${C_RELEASE_FLAGS}")
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS} -Wjump-misses-init ${C_DEBUG_FLAGS}")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS} ${C_RELEASE_FLAGS}")
 
+if (CMAKE_BUILD_TYPE STREQUAL Debug)
+    set(IPO_SUPPORTED OFF)  # only for DEBUG
+endif()
 # 
 # Deployment/installation setup
 # 
@@ -137,13 +174,18 @@ if (NOT SYSTEM_DIR_INSTALL)
     endif()
 endif()
 
-set(DAEMON_MANAGER SysV)  # TODO SysV detection
-if(EXISTS "/etc/systemd/")
+# managers:
+#   0 - SysV
+#   1 - OpenRC
+#   2 - systemd
+
+set(DAEMON_MANAGER 0)  # TODO SysV detection
+if(EXISTS "/bin/systemctl")
     message(STATUS "Init: systemd detected")
-    set(DAEMON_MANAGER systemd)
+    set(DAEMON_MANAGER 2)
 elseif (EXISTS "/etc/rc.conf")
     message(STATUS "Init: OpenRC detected")
-    set(DAEMON_MANAGER OpenRC)
+    set(DAEMON_MANAGER 1)
 else()
     message(FATAL_ERROR "Neither systemd nor OpenRC detected - other init systems are not supported!")
 endif()

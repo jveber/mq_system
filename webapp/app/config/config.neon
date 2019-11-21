@@ -3,7 +3,7 @@
 # https://nette.org/security-warning
 #
 php:
-    date.timezone: Europe/Prague #change this if you want
+    date.timezone: Europe/Prague
 
 database:
     database:
@@ -22,7 +22,7 @@ database:
 
 security:
     users:
-        jvr: 'c16cce510a5a974ef60f1c6dagb7ea141a569d26a9951675396a5cec6b4e70e12559f978389056dc44ee7c2c4b85eb7532e883ee4819b9064642de7089707e9' # remove this one it's just an example
+        jvr: e12b628af838088c4d6ee570234efcbe82a347a788bcf0c68211419a2cb4669f41e476eac96c90bef24c72b29ff58288c82ea2e1633eecfb5e14211e21f676cc
 
 application:
     errorPresenter: Error

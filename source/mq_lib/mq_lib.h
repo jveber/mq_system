@@ -22,13 +22,14 @@ namespace MQ_System {
 
 class Daemon {
  public:
-    Daemon(const char* demon_name, const char* pid_name, bool no_daemon = false);  // may throw std::runtime_error if error happened
+    Daemon(const char* demon_name, const char* pid_name, bool no_daemon = false);  // may throw std::runtime_error if error happened (always shall log reason)
     virtual ~Daemon() noexcept;
-    virtual void CallBack(const std::string& topic, const std::string& message) {} // user may overload this one if he needs callback function
-    void Unsubscribe(const std::string& topic) noexcept;
-    void Subscribe(const std::string& topic) noexcept;
-    void Publish(const std::string& topic, const std::string& message);
-    std::shared_ptr<spdlog::logger> _logger;
+    virtual void CallBack(const std::string& topic , const std::string& message) {} // user may overload this one if he needs callback function - proxy for message system - Subscribe (Callback)
+    void Unsubscribe(const std::string& topic) noexcept;  // proxy for message system - Unsubscribe
+    void Subscribe(const std::string& topic) noexcept; // proxy for message system - Subscribe
+    void Publish(const std::string& topic, const std::string& message); // proxy for message system - Publish
+    const std::shared_ptr<spdlog::logger> _logger;  // logger for general use (logging)
+    void SleepForever();  // it is better to avoid this one as much as possible but sometimes I found that hard to avoid it so it's here.
  private:
     void load_mq_system_configuration();
     void daemonize(bool no_deamon) const;
@@ -48,4 +49,4 @@ class Daemon {
     bool _log_mqtt;
 };
 
-};  // namespace MQ_System
+}  // namespace MQ_System

@@ -35,11 +35,7 @@ i2cxx::~i2cxx() noexcept {
 }
 
 int i2cxx::smbus_data(char rw, uint8_t cmd, int size, union i2c_smbus_data *data) {
-   struct i2c_smbus_ioctl_data args;
-   args.read_write = rw;
-   args.command    = cmd;
-   args.size       = size;
-   args.data       = data;
+   struct i2c_smbus_ioctl_data args { rw, cmd, size, data };
    return ioctl(_fd, I2C_SMBUS, &args);
 }
 
@@ -51,7 +47,7 @@ void i2cxx::write_byte(unsigned bVal) {
 }
 
 void i2cxx::write_byte_data(unsigned reg, unsigned bVal) {
-    union i2c_smbus_data data;
+    union i2c_smbus_data data = {};
     data.byte = bVal;
     if (smbus_data(I2C_SMBUS_WRITE, reg, I2C_SMBUS_BYTE_DATA, &data) < 0) {
         _logger->error("I2Cxx write byte error {} : {}", _addr, strerror(errno));
@@ -60,7 +56,7 @@ void i2cxx::write_byte_data(unsigned reg, unsigned bVal) {
 }
 
 uint8_t i2cxx::read_byte() {
-    union i2c_smbus_data data;
+    union i2c_smbus_data data = {};
     if (smbus_data(I2C_SMBUS_READ, 0, I2C_SMBUS_BYTE, &data) < 0) {
         _logger->error("I2Cxx read byte error {} : {}", _addr, strerror(errno));
         throw std::runtime_error("");
@@ -69,7 +65,7 @@ uint8_t i2cxx::read_byte() {
 }
 
 uint8_t i2cxx::read_byte_data(unsigned reg) {
-    union i2c_smbus_data data;
+    union i2c_smbus_data data = {};
     if (smbus_data(I2C_SMBUS_READ, reg, I2C_SMBUS_BYTE_DATA, &data) < 0) {
         _logger->error("I2Cxx read byte data error {} : {}", _addr, strerror(errno));
         throw std::runtime_error("");

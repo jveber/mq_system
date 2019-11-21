@@ -27,6 +27,12 @@
 #include "mosq_log.h"
 #include "db_log.h"
 
+// sanitizers
+#ifndef NDEBUG 
+    #include <sanitizer/asan_interface.h>
+#endif
+
+
 namespace MQ_System {
 
 Daemon *g_daemon = nullptr;  // this is needed to support signal handler access to terminate the daemon if called
@@ -35,33 +41,47 @@ Daemon *g_daemon = nullptr;  // this is needed to support signal handler access 
 
 static void signal_handler(int sig) {
     if (sig == SIGTERM) {
-        delete MQ_System::g_daemon;
+        MQ_System::g_daemon->~Daemon();  // This may lead to leak; however we expect Daemon to be stack constructed so we can't let normal destructor to be here and placement destructor would do the same... 
         exit(0);
     } else if (sig == SIGHUP){
         //TODO reload configuration - not implemented
     }
 }
 
+void sqlog_error_callback(void *pArg, int iErrCode, const char *zMsg) {
+    MQ_System::Daemon * vData = reinterpret_cast<MQ_System::Daemon *>(pArg);
+    vData->_logger->debug("Sqlite code: {} message: {}", iErrCode, zMsg);
+}
+
+#ifndef NDEBUG
+extern "C" const char *__asan_default_options() {
+  return "log_path=/home/jaromir/debug/mq_system:check_initialization_order=true:detect_stack_use_after_return=true:detect_leaks=1";
+}
+
+extern "C" const char* __ubsan_default_options() {
+    return "log_path=/home/jaromir/debug/mq_system";
+}
+#endif
+
 namespace MQ_System {
 const char* Daemon::kMqSystemConfigFile = "/etc/mq_system/system.conf";  // hard coded path (might be altered but...)
 const char* Daemon::kDefaultHost = "127.0.0.1";
 
-Daemon::Daemon(const char* daemon_name, const char* pid_name, bool no_daemon) : _log_mqtt(false), _pid_file(pid_name) {
-    auto _log_sink = std::make_shared<spdlog::sinks::dist_sink_mt>();           // this sink allow more sinks for logegr and changing them dynamically during execution  
-    _logger = std::make_shared<spdlog::logger>(daemon_name, _log_sink);
+
+Daemon::Daemon(const char* daemon_name, const char* pid_name, bool no_daemon) : _log_mqtt(false), _pid_file(pid_name), _logger(std::make_shared<spdlog::logger>(daemon_name, std::make_shared<spdlog::sinks::dist_sink_mt>())) {
+    g_daemon = this;  // save the daemon ID for signal handler purposes
+    auto _log_sink = std::dynamic_pointer_cast<spdlog::sinks::dist_sink_mt>(_logger->sinks()[0]);
     _logger->set_level(spdlog::level::trace);
-    auto basic_sink = std::make_shared<spdlog::sinks::syslog_sink_mt>();
+    auto basic_sink = std::make_shared<spdlog::sinks::syslog_sink_mt>("mq_system", 0, LOG_USER, false);  // shall we use systemd sink for systemd?
     _log_sink->add_sink(basic_sink);
     daemonize(no_daemon);
-    g_daemon = this;  // save the daemon ID for signal handler purposes
     signal(SIGTERM, signal_handler);
     signal(SIGHUP, signal_handler);
     load_mq_system_configuration();
 	_logger->flush();
     if (_log_file.size()) {
         try {
-            auto rotating = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(_log_file, 1024*1024, 5);
-            _log_sink->add_sink(rotating);
+            _log_sink->add_sink(std::make_shared<spdlog::sinks::rotating_file_sink_mt>(_log_file, 1024*1024, 5));
             _logger->flush();
             _log_sink->remove_sink(basic_sink);
             _logger->trace("file_log initialized");
@@ -88,8 +108,7 @@ Daemon::Daemon(const char* daemon_name, const char* pid_name, bool no_daemon) : 
     _logger->flush();
     connect_mqtt();
     if (_log_mqtt) {
-        auto mosquitto_sink = std::make_shared<mosq_sink>(_mosquitto_object);
-        _log_sink->add_sink(mosquitto_sink);  // this sink is not to presistent storage
+        _log_sink->add_sink(std::make_shared<mosq_sink>(_mosquitto_object));  // this sink is not to presistent storage
         _logger->flush();
         _log_sink->remove_sink(basic_sink);
         _logger->trace("mqtt_log initialized");
@@ -100,16 +119,18 @@ Daemon::Daemon(const char* daemon_name, const char* pid_name, bool no_daemon) : 
 
 std::shared_ptr<spdlog::sinks::sink> Daemon::conect_log_db() {
     static const char log_init[] = "CREATE TABLE IF NOT EXISTS log (timestamp TIMESTAMP PRIMARY KEY, level INTEGER, thread INTEGER, msgid INTEGER, logger STRING, message STRING)";
-    sqlite3* _pLog;
+    sqlite3* _pLog = nullptr;
     if (!sqlite3_threadsafe()) {
-        if(sqlite3_config(SQLITE_CONFIG_SERIALIZED)) {
+        if (sqlite3_config(SQLITE_CONFIG_SERIALIZED)) {
             _logger->warn("Unable to set serialized mode for SQLite! Tt is necessary to recompile it SQLITE_THREADSAFE!");
             _logger->warn("We Continue using unsafe interface but beware of possible crash");
         }
     }
+    sqlite3_config(SQLITE_CONFIG_LOG, sqlog_error_callback, this);
+
     sqlite3_initialize();
     if (SQLITE_OK != sqlite3_open_v2(_log_db.c_str(), &_pLog, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL)) {
-        _logger->warn("Sqlite3: Unable to open log database file! {}", _log_db);    
+        _logger->warn("Sqlite3: Unable to open log database file! {}", _log_db);
         return nullptr;
     }
     sqlite3_extended_result_codes(_pLog, true);
@@ -128,9 +149,11 @@ void Daemon::load_mq_system_configuration() {
         cfg.readFile(kMqSystemConfigFile);
     } catch(const libconfig::FileIOException &fioex) {
         _logger->error("I/O error while reading system configuration file: {}", kMqSystemConfigFile);
+        _logger->flush();
         throw std::runtime_error("");
     } catch(const libconfig::ParseException &pex) {
         _logger->error("Parse error at {} : {} - {}",pex.getFile(), pex.getLine(), pex.getError());
+        _logger->flush();
         throw std::runtime_error("");
     }
     try {
@@ -155,17 +178,21 @@ void Daemon::load_mq_system_configuration() {
         }
     } catch(const libconfig::SettingNotFoundException &nfex) {
         _logger->error("Required setting not found in system configuration file");
+        _logger->flush();
         throw std::runtime_error("");
     } catch (const libconfig::SettingTypeException &nfex) {
         _logger->error("Seting type error (at system configuaration) at: {}", nfex.getPath());
+        _logger->flush();
         throw std::runtime_error("");
     }
 }
 
 void Daemon::daemonize(bool no_daemon) const {
-#ifdef SYSVINIT
-    if (no_daemon)
+#if DAEMON_MANAGER==1
+    if (no_daemon) {
+        _logger->debug("Daemonize no-daemon!");
         return;
+    }
     if (daemon(0, 0)) {
         _logger->error("Daemonize error");
         throw std::runtime_error("");
@@ -181,7 +208,9 @@ void Daemon::daemonize(bool no_daemon) const {
     }
     fclose(pid_file);
     _logger->debug("Deamonize done");
-#endif // systemd does not need to fork od PID file at all
+#else
+    _logger->debug("Daemonize skipped!");
+#endif // systemd does not need to fork & PID file at all
 }
 
 static void OnMessage (struct mosquitto *mosq __attribute__((unused)), void * context, const struct mosquitto_message * message) {
@@ -197,19 +226,23 @@ void Daemon::connect_mqtt() {
     _mosquitto_object = mosquitto_new(NULL, true, this);
     if (!_mosquitto_object) {
         _logger->error("Mosquitto Error: Out of memory.");
+        _logger->flush();
         throw std::runtime_error("");
     }
-    int c = 10;  // we wait up to 10s for connection (it may start the same time the mosquitto dows so it's gonna wait for it to init)
-    for(; c > 0; --c) {
+    int connection_attempts = 10;  // we wait up to 10s for connection (it may start the same time the mosquitto dows so it's gonna wait for it to init)
+    for(; connection_attempts > 0; --connection_attempts) {
         if (mosquitto_connect(_mosquitto_object, _connection_host.c_str(), _connection_port, 60) == MOSQ_ERR_SUCCESS)
             break;
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
-    if (c <= 0) {
+    if (!connection_attempts) {
         _logger->error("Mosquitto Error: Unable to connect to {}:{}", _connection_host, _connection_port);
+        mosquitto_destroy(_mosquitto_object);   // we're still in constructor so we need to call this one explicitly.
+        mosquitto_lib_cleanup();
+        _logger->flush();
         throw std::runtime_error("");
     }
-    _logger->trace("connect_mqtt done after {} seconds", 10 - c);
+    _logger->trace("connect_mqtt done after {} seconds", 10 - connection_attempts);
     _logger->flush();
     mosquitto_message_callback_set(_mosquitto_object, OnMessage);
     mosquitto_loop_start(_mosquitto_object);
@@ -217,7 +250,7 @@ void Daemon::connect_mqtt() {
 
 Daemon::~Daemon() noexcept {
     _logger->trace("~Daemon()");
-#ifdef SYSVINIT
+#if DAEMON_MANAGER==1
     _logger->trace("Unlink {}", _pid_file);
     auto res = unlink(_pid_file.c_str());
     if (res < 0) {
@@ -229,7 +262,7 @@ Daemon::~Daemon() noexcept {
     if (!_logger.unique())
         _logger->warn("Logger terminate - Pointer not unique!");
     _logger->flush();
-    _logger.reset();
+    // const_cast<std::shared_ptr<spdlog::logger>(_logger).reset();  // now we release and cleanup all sinks 
     spdlog::shutdown();
     mosquitto_disconnect(_mosquitto_object);
     mosquitto_loop_stop(_mosquitto_object, true);
@@ -253,6 +286,13 @@ void Daemon::Publish(const std::string& topic, const std::string& message) {
     int mosresult = mosquitto_publish(_mosquitto_object, NULL, topic.c_str(), message.length(), message.c_str(), 2, false);
     if (mosresult != MOSQ_ERR_SUCCESS)
         _logger->warn("Publish error: {} ", mosresult);
+}
+void Daemon::SleepForever() {
+    std::condition_variable cv;
+    std::mutex m;
+    std::unique_lock<std::mutex> lock(m);
+    cv.wait(lock, [] {return false;});  // wait for something that would never happen
+    //std::this_thread::sleep_until(std::chrono::time_point<std::chrono::system_clock>::max());  // this one proved to be unsafe (overflow (undefined) - may not work)
 }
 
 }  // namespace MQ_System

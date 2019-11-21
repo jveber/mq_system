@@ -9,12 +9,12 @@ class SignPresenter extends Nette\Application\UI\Presenter
 {
     public function signInFormSucceeded(Form $form, Nette\Utils\ArrayHash $values)
     {
-      try {        
-        $this->getUser()->login($values->username, hash_pbkdf2("sha3-512", $values->password, "salt", 1000));
+      try {
+        $this->getUser()->login($values->username, hash_pbkdf2("sha3-512", $values->password, "sůl", 1000));
         $this->redirect('Homepage:');
 
       } catch (Nette\Security\AuthenticationException $e) {
-        $form->addError('Nesprávné přihlašovací jméno nebo heslo. - ' . hash_pbkdf2("sha3-512", $values->password, "salt", 1000));
+        $form->addError('Nesprávné přihlašovací jméno nebo heslo. - ' . hash_pbkdf2("sha3-512", $values->password, "sůl", 1000));
       }
     }
 

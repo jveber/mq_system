@@ -91,8 +91,7 @@ void gpiocxx::request(uint32_t gpio, bool input) {
             _lines[gpio]->event = false;
         }
     }
-    struct gpiohandle_request req;
-    memset(&req, 0, sizeof(req));
+    struct gpiohandle_request req = {};
     if (input)
         req.flags |= GPIOHANDLE_REQUEST_INPUT;
     else
@@ -131,8 +130,7 @@ void gpiocxx::set_output(uint32_t gpio) {
 bool gpiocxx::get_value(uint32_t gpio) {
     if (!is_input(gpio))
         set_input(gpio);
-    struct gpiohandle_data data;
-    memset(&data, 0, sizeof(data));
+    struct gpiohandle_data data = {};
     set_input(gpio);
     int rv = ioctl(_lines[gpio]->handle_fd, GPIOHANDLE_GET_LINE_VALUES_IOCTL, &data);
     if (rv < 0) {
@@ -145,8 +143,7 @@ bool gpiocxx::get_value(uint32_t gpio) {
 void gpiocxx::set_value(uint32_t gpio, bool value) {
     if (!is_output(gpio))
         set_output(gpio);
-    struct gpiohandle_data data;
-    memset(&data, 0, sizeof(data));
+    struct gpiohandle_data data = {};
     data.values[0] = value;
     set_output(gpio);
     int rv = ioctl(_lines[gpio]->handle_fd, GPIOHANDLE_SET_LINE_VALUES_IOCTL, &data);
@@ -167,21 +164,21 @@ void gpiocxx::reset(uint32_t gpio) {
 }
 
 void gpiocxx::watch_event(uint32_t gpio, event_req event) {
-    struct gpioevent_request req;
+    struct gpioevent_request req = {};
     gpiocxx::reset(gpio);   // free handle if it's already allocated
     _lines[gpio] = _lines[gpio] = new line();  //TODO - not exactly resolved.. ideal way
-    memset(&req, 0, sizeof(req));
     strncpy(req.consumer_label, "mq_dht_daemon", sizeof(req.consumer_label) - 1);
     req.lineoffset = gpio;
     req.handleflags |= GPIOHANDLE_REQUEST_INPUT;
     switch(event) {
         case event_req::BOTH_EDGES:
-            req.eventflags |= GPIOEVENT_REQUEST_FALLING_EDGE;
+            req.eventflags = GPIOEVENT_REQUEST_FALLING_EDGE | GPIOEVENT_REQUEST_RISING_EDGE;
+            break;
         case event_req::RISING_EDGE:
-            req.eventflags |= GPIOEVENT_REQUEST_RISING_EDGE;
+            req.eventflags = GPIOEVENT_REQUEST_RISING_EDGE;
             break;
         case event_req::FALLING_EDGE:
-            req.eventflags |= GPIOEVENT_REQUEST_FALLING_EDGE;
+            req.eventflags = GPIOEVENT_REQUEST_FALLING_EDGE;
             break;
     }
     auto rv = ioctl(_chip_fd, GPIO_GET_LINEEVENT_IOCTL, &req);
@@ -194,17 +191,14 @@ void gpiocxx::watch_event(uint32_t gpio, event_req event) {
 }
 
 int gpiocxx::wait_event(uint32_t gpio, const struct timespec *timeout) {
-    struct pollfd fds[1];
+    struct pollfd fds[1] = {};
     check_offset(gpio);
     if (_lines[gpio] == nullptr || !(_lines[gpio]->event)) {
         _logger->error("GPIOcxx wait for event but events not requested (watched) on line {}", gpio);
         throw std::runtime_error("");
     }
-
-    memset(fds, 0, sizeof(fds));
     fds[0].fd = _lines[gpio]->handle_fd;
     fds[0].events = POLLIN | POLLPRI;
-
     int rv = ppoll(fds, 1, timeout, NULL);
     if (rv < 0) {
         _logger->error("GPIOcxx unable to pool for events on line {}: {}", gpio, strerror(errno));
@@ -223,8 +217,7 @@ std::vector<uint32_t> gpiocxx::wait_events(const std::vector<uint32_t>& l, const
             _logger->error("GPIOcxx wait for event but events not requested (watched) on line {}", *it);
             throw std::runtime_error("");
         }
-        struct pollfd fd;
-        memset(&fd, 0, sizeof(fd));
+        struct pollfd fd = {};
         fd.fd = _lines[*it]->handle_fd;
         fd.events = POLLIN | POLLPRI;
         fds.emplace_back(fd);
@@ -253,7 +246,7 @@ void gpiocxx::read_event(uint32_t gpio, struct gpioevent_data& evdata) {
         _logger->error("GPIOcxx wait for event but events not requested (watched) on line {}", gpio);
         throw std::runtime_error("");
     }
-    memset(&evdata, 0, sizeof(evdata));
+    evdata = {};
     ssize_t rd = read(_lines[gpio]->handle_fd, &evdata, sizeof(evdata));
     if (rd < 0) {
         _logger->error("GPIOcxx unable to read event on line {}: {}", gpio, strerror(errno));

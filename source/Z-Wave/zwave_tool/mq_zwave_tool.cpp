@@ -378,17 +378,17 @@ int main()
       max_node = x.first;
   }
   vector<bool> ready_map(max_node+1, false);
-  for (int time_count_douwn = 600; time_count_douwn > 0; )
-  {
+  for (int time_count_douwn = 600; time_count_douwn > 0; ) {
+    bool any = false;
     std::lock_guard<std::mutex> lck (g_mtx);
-    for (const auto& x : g_network_device_value_map)
-    {
+    for (const auto& x : g_network_device_value_map) {
       if (ready_map[x.first])
         continue;
+      any = true;
+      printf("node %d", x.first);
       bool awake = g_manager->IsNodeAwake (g_home_id, x.first);
       bool info = g_manager->IsNodeInfoReceived(g_home_id, x.first);
       bool failed = g_manager->IsNodeFailed(g_home_id, x.first);
-      printf("node %d", x.first);
       if (awake)
         printf(" awake");
       if (failed)
@@ -405,7 +405,7 @@ int main()
       }
       ready_map[x.first] = true;
     }
-    if (std::all_of(ready_map.cbegin(), ready_map.cend(), [](bool i){return i;}))
+    if (!any)
       break;
   }
 

@@ -1,11 +1,11 @@
 
 add_custom_target(uninstall 
-	COMMAND rm /etc/mq_system/system.conf
-	COMMAND rm -r /var/log/mq_system
-	COMMAND rm /var/db/mq_system.db
-	COMMAND rm /var/db/mq_exe_system.db
-	COMMAND rm /var/db/mq_log.db
-	COMMAND rm -r /etc/mq_system
+	COMMAND rm -f /etc/mq_system/system.conf
+	COMMAND rm -rf /var/log/mq_system
+	COMMAND rm -f /var/db/mq_system.db
+	COMMAND rm -f /var/db/mq_exe_system.db
+	COMMAND rm -f /var/db/mq_log.db
+	COMMAND rm -rf /etc/mq_system
 )
 # 
 # Configuration for all sub-projects
@@ -64,13 +64,13 @@ if (MQ_1_WIRE_MODULE)
 	endif()
 endif()
 
-#if (MQ_UNIPI_MODULE)
-#	if (pigpio_FOUND OR (i2cxx_FOUND AND  gpiocxx_FOUND))
-#		add_subdirectory(unipi_service)
-#	else ()
-#		message(STATUS "pigpio nor dev/i2c and gpio found - unable to build UniPi module")
-#	endif()
-#endif()
+if (MQ_UNIPI_MODULE)
+	if (pigpio_FOUND OR (i2cxx_FOUND AND  gpiocxx_FOUND))
+		add_subdirectory(unipi_service)
+	else ()
+		message(STATUS "pigpio nor dev/i2c and gpio found - unable to build UniPi module")
+	endif()
+endif()
 
 
 find_library(OpenZWave NAMES libopenzwave.a HINTS ${CMAKE_SOURCE_DIR}/open-zwave)
@@ -95,9 +95,11 @@ if (MQ_EXE_MODULE)
 	add_subdirectory(exe_service)
 endif ()
 
-file(MAKE_DIRECTORY /var/log/mq_system)
-if (DAEMON_MANAGER STREQUAL OpenRC)
+install(DIRECTORY DESTINATION /var/log/mq_system)
+install(DIRECTORY DESTINATION /var/db/)
+
+if (DAEMON_MANAGER EQUAL 1)
 	file(MAKE_DIRECTORY /var/run/)
 endif()
-file(MAKE_DIRECTORY /var/db/)
+
 install(FILES ${CMAKE_SOURCE_DIR}/data/system.conf DESTINATION /etc/mq_system/ ) # this one should also make directory

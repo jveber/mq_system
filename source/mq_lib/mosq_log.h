@@ -21,13 +21,12 @@ class mosq_sink : public spdlog::sinks::base_sink<spdlog::details::null_mutex> {
  protected:
     void sink_it_(const spdlog::details::log_msg& msg) override
     {
-        fmt::memory_buffer formatted;
-        sink::formatter_->format(msg, formatted);
+        spdlog::memory_buf_t formatted;
+        spdlog::sinks::base_sink<spdlog::details::null_mutex>::formatter_->format(msg, formatted);
         mosquitto_publish(_mosquitto_object, NULL, "app/log/message", formatted.size(), formatted.data(), 2, false);
     }
 
-    void flush_() override {	
-    }
+    void flush_() override {}
  private:
     struct mosquitto* _mosquitto_object;
 };

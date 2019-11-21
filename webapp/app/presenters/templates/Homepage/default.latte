@@ -1,6 +1,7 @@
 {block scripts} 
     <script type="text/javascript" src="{$basePath}/paho-mqtt-min.js"></script>
-    <script type="text/javascript" src="{$basePath}/jquery-3.3.1.min.js"></script>
+    <script type="text/javascript" src="{$basePath}/jquery-3.4.1.min.js"></script>
+    <script type="text/javascript" src="{$basePath}/jquery.md5.min.js"></script>
     <script type="text/javascript" src="{$basePath}/netteForms.min.js"></script>
     <script type="text/javascript" src="{$basePath}/nette.ajax.js"></script>
     <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
@@ -29,7 +30,7 @@
     display: flex;
      flex-wrap: wrap;
 }
-#logContent {
+#log {
     width: 100%;
     height: 25em;
     overflow: auto;
@@ -47,8 +48,7 @@
     $( function() {
         $("#menu").menu();
         $("#graph").hide();
-        $("#log_browser").hide();
-        // $("#logContent").resizable();
+        // $("#log").resizable();
     } );
     </script>
     <script type="text/javascript">
@@ -108,34 +108,28 @@
             keepAliveInterval: 30,
             //Gets Called if the connection has successfully been established
             onSuccess: function () {
-                $('#ws-con').show();
-                $('#ws-lost').hide();
-                $('#ws-recon').hide();
+                $('#ws-status').text('Connected...');
                 client.subscribe('#', { qos: 2 });
             }, 
             //Gets Called if the connection could not be established
             onFailure: function (message) {
-                $('#ws-lost').show();
-                $('#ws-con').hide();
-                $('#ws-recon').hide();
+                $('#ws-status').text('Connection failed: ' + message.errorMessage);
                 setTimeout(function(){ client.connect(options); }, 2000);
             }
         };
         //Reconnect
         client.onConnectionLost = function (responseObject) {
-            $('#ws-lost').hide();
-            $('#ws-con').hide();
-            $('#ws-recon').show();
+            $('#ws-status').text('Connection lost trying to reconnect... ' + responseObject.errorMessage);
             client.connect(options);
         };
         //Parse mqtt message
         client.onMessageArrived = function (message) {
             var timestamp = new Date();
             if (message.destinationName == "app/log/message"){
-        if ($('#logContent > p').length >= 200) {
-                    $('#logContent :last-child').remove();
+        if ($('#log > p').length >= 200) {
+                    $('#log :last-child').remove();
                 }
-                $('#logContent').prepend("<p>" + message.payloadString);
+                $('#log').prepend("<p>" + message.payloadString);
             } else if (message.destinationName.substring(0,6) == "status") {
                 var sensor = message.destinationName.replace(new RegExp("\/","g"), '\\/');
                 if (!$('#' + sensor).length) {
@@ -146,13 +140,14 @@
                     for (var property in data) {
                         if (data.hasOwnProperty(property)) {
                             var value = Array.isArray(data[property]) ? data[property][0] : data[property];
-                            if (!$('#' + sensor + ' .' + property).length) {
-                                $('#' + sensor).append('<div class="' + property + '"><span class="value_time">' + timestamp.toLocaleString() + '</span> <span class="value_name">' + property + '</span> <span class="value">' + value.toFixed(2) + '</span></div>');
+                            const selector = '#' + sensor + ' .' + $.MD5(property);
+                            if (!$(selector).length) {
+                                $('#' + sensor).append('<div class="' + $.MD5(property) + '"><span class="value_time">' + timestamp.toLocaleString() + '</span> <span class="value_name">' + property + '</span> <span class="value">' + value.toFixed(2) + '</span></div>');
                                 if (Array.isArray(data[property])) {
-                                    $('#' + sensor + ' > .' + property).append(' <span class="units">' +data[property][1] + '</span>');
+                                    $('#' + sensor + ' > .' + $.MD5(property)).append(' <span class="units">' +data[property][1] + '</span>');
                                 }
                             }
-                            var selector = '#' + sensor + ' .' + property;
+                            
                             var selector_time = selector + ' > .value_time';
                             var selector_value = selector + ' > .value'; 
                             $(selector_time).text(timestamp.toLocaleString());
@@ -167,6 +162,7 @@
         //Attempt to connect
         client.connect(options);
     </script>
+
 {/block}
 {block content}
     {var $sensor = ""}
@@ -180,9 +176,12 @@
             <div class="sensor" id="{$post->sensor_name}">
             <span class="sensor_name">{$post->sensor_name}</span>
         {/if}
-        <a onclick='$("#log, #exe, #log_browser").hide(); $("#graph").show()' class="ajax" href="{link graph! 'sensors[0]' => $post->sensor_id, 'value' => $post->value_name, 'date_from' => $date_from, 'date_to' => $date_to}">
-        <div n:class="$post->value_name">
-        <span class="value_time">{$post->timestamp|date:'j. n. Y G:i:s'}</span>
+            {*
+        <a class="ajax" href="{link graph: 'sensors[0]' => $post->sensor_id, 'value' => $post->value_name, 'date_from' => $date_from, 'date_to' => $date_to}">
+            *}
+            <a onclick='$("#log, #exe").hide(); $("#graph").show()' class="ajax" href="{link graph! 'sensors[0]' => $post->sensor_id, 'value' => $post->value_name, 'date_from' => $date_from, 'date_to' => $date_to}">
+            <div n:class="$post_hash[$post->value_name]">
+        <span class="value_time">{$post->timestamp|date:'j. n. Y G:i:s'}</span> {* date:'j. n. Y G:i:s  *}
         <span class="value_name">{$post->value_name}</span>
         <span class="value">{$post->value|number:2}</span>
         <span class="units">{$post->units_name}</span>
@@ -194,26 +193,19 @@
     </div>
     
     <h3>{_'Websocket status'}</h3>
-    <div id="ws-status">
-    <span id="ws-con" style="display:none">{_'Connected'}...</span>
-    <span id="ws-lost" style="display:none">{_'Connection lost'}...</span>
-    <span id="ws-recon">{_'(Re)Connecting'}...</span>
-    <span id="ws-status"></span>
-    </div>
+    <div id="ws-status"></div>
+    
 
     <ul id="menu">
-        <li><a onclick='$("#graph, #exe, #log_browser").hide("blind"); $("#log").show("blind")' href="#log">{_'Log'}</a></li>
-        <li><a onclick='$("#log, #exe, #log_browser").hide("blind"); $("#graph").show("blind")' href="#graph">{_'Graph'}</a></li>
-        <li><a onclick='$("#log, #graph, #log_browser").hide("blind"); $("#exe").show("blind")' class="ajax" n:href="exe!">{_'Exe'}</a></li>
-        <li><a onclick='$("#graph, #exe, #log").hide("blind"); $("#log_browser").show("blind")' href="#log_browser">{_'Browser'}</a></li>
+        <li><a onclick='$("#graph, #exe").hide("blind"); $("#log").show("blind")' href="#log">{_'Log'}</a></li>
+        <li><a onclick='$("#log, #exe").hide("blind"); $("#graph").show("blind")' href="#graph">{_'Graph'}</a></li>
+        <li><a onclick='$("#log, #graph").hide("blind"); $("#exe").show("blind")' class="ajax" n:href="exe!">{_'Exe'}</a></li>
     </ul>
   
     <div id="log">
-        <div id="logContent">
         {foreach $logs as $log}
         <p>{$log->message }
         {/foreach}
-        </div>
     </div>
 
     <div id="graph">
@@ -250,19 +242,6 @@
                 {/foreach}
                 {control scriptForm}
             {/ifset}
-        {/snippet}
-    </div>
-
-    <div id="log_browser">
-        {control logForm}
-        {snippet LogBrowser}
-        {ifset $logx}
-        <div>
-        {foreach $logx as $log}
-        <p>{$log->message }
-        {/foreach}
-        </div>
-        {/ifset}
         {/snippet}
     </div>
 {/block}

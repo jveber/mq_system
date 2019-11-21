@@ -11,7 +11,7 @@
 
 #include <stdexcept>    // for excpetion
 #include <regex>        // regex_match
-#include <future>       // packaged_task
+#include <future>       // async
 #include <ctime>
 
 #include "mq_exe_daemon.h"
@@ -21,10 +21,8 @@ void time_thread_start(Exe_Service *exe_service) {
 }
 
 const std::array<std::string, 1 > Exe_Service::kTableDefinitions = {
-        "CREATE TABLE IF NOT EXISTS script     (name TEXT PRIMARY KEY, script TEXT)",  // basic table for scripts
+    "CREATE TABLE IF NOT EXISTS script (name TEXT PRIMARY KEY, script TEXT)",  // basic table for scripts
 };
-
-std::string log_init = "CREATE TABLE IF NOT EXISTS log (timestamp TIMESTAMP PRIMARY KEY, level INTEGER, thread INTEGER, msgid INTEGER, logger STRING, message STRING)";
 
 const std::array<std::string, 1 > Exe_Service::kStatementDefinitions = {
     "SELECT * FROM script",
@@ -35,19 +33,19 @@ const std::string Exe_Service::kReloadTopic = "app/exe/reload";
 Exe_Service::Exe_Service() : Daemon("mq_exe_daemon", "/var/run/mq_exe_daemon.pid"), _tokener(json_tokener_new()), _terminate_time_thread(false) {}
 
 void Exe_Service::load_daemon_configuration() {
-    spdlog::set_pattern("[%x %H:%M:%S.%e][%n][%t][%l] %v");
+    spdlog::set_pattern("[%x %H:%M:%S.%e][%n][%t][%l] %v");  // here just to add thread id logging
     
-    static const char* config_file = "/etc/mq_system/mq_exe_daemon.conf";
-    static const char* default_db_uri = "/var/db/mq_exe_system.db";
+    static const char* kConfigFile = "/etc/mq_system/mq_exe_daemon.conf";
+    static const std::string kDefaultDbUri = "/var/db/mq_exe_system.db";
     Config cfg;
 
     try {
-        cfg.readFile(config_file);
+        cfg.readFile(kConfigFile);
     } catch(const FileIOException &fioex) {
-        _logger->error("I/O error while reading system configuration file: {}", config_file);
+        _logger->error("I/O error while reading system configuration file: {}", kConfigFile);
         throw std::runtime_error("");
     } catch(const ParseException &pex) {
-        _logger->error("Parse error at {} : {} - {}", pex.getFile(), pex.getLine(), pex.getError());
+        _logger->error("Parse error at {} : {} - {}", kConfigFile, pex.getLine(), pex.getError());
         throw std::runtime_error("");
     }
     try {
@@ -55,7 +53,7 @@ void Exe_Service::load_daemon_configuration() {
         if (root.exists("uri"))
             root.lookupValue("uri", _db_uri);
         else
-            _db_uri = default_db_uri;
+            _db_uri = kDefaultDbUri;
         if  (cfg.exists("log_level")) {
             int level;
             cfg.lookupValue("log_level", level);
@@ -84,70 +82,67 @@ void Exe_Service::check_and_init_database() {
     }
 }
 
-bool Exe_Service::scan_script(const std::string& content, std::unordered_set<std::string>& sensor_list) {
-    const std::string regval_string("register_value("); 
-    const std::regex sensor_regex("(\\w|\\/)+\\:\\w+");
-
-    for (size_t regval_string_scan_position = 0; regval_string_scan_position != std::string::npos; ) {
-        size_t&& result = content.find(regval_string, regval_string_scan_position);
-        if (result == std::string::npos)
-            break;
-        regval_string_scan_position = result + regval_string.size();
-        result = content.find(')', regval_string_scan_position);
-        if (result == std::string::npos)
-            break;
-        const auto& func_end = result;
-        for (size_t iter = regval_string_scan_position;;) {
-            size_t&& result = content.find('"', iter);
-            if (result == std::string::npos || result > func_end)
-                break;
-            const auto& str_start = result + 1;
-            result = content.find('"', str_start);
-            if (result == std::string::npos || result > func_end)
-                break;
-            iter = result + 1;
-            const auto& extracted_sensor_value_string = content.substr(str_start, result - str_start);
-            if (!std::regex_match(extracted_sensor_value_string, sensor_regex))
-                return false;
-            const auto& sensor_value_separator_position = extracted_sensor_value_string.find(":");
-            auto&& sensor_name = std::string("status/") + extracted_sensor_value_string.substr(0, sensor_value_separator_position);
-            _logger->debug("scan script - adding string \"{}\" to sensor list", sensor_name);
-            sensor_list.emplace(sensor_name);
-        }
-        regval_string_scan_position = result;
-    }
-    return true;
-}
-
+// This scans @content for "register_value(" and than tries to find it's string parameters, match them with regex and store them into @sensor_list
 /**
  * Right now this scan works well; however it does not work with LUA comments. It is kind of complicated to implement it so right now we 
  * accept this feature (BUG?) as it is. It should not affect users too much - if it is at least documented.
  */
+bool Exe_Service::scan_script(const std::string& content, std::unordered_set<std::string>& sensor_list) {
+    for (size_t regval_string_scan_position = 0; regval_string_scan_position != std::string::npos; ) {
+        const std::string regval_string { "register_value(" };
+        const auto find_regval_result = content.find(regval_string, regval_string_scan_position);
+        if (find_regval_result == std::string::npos)
+            break;
+        const auto regval_params_position = find_regval_result + regval_string.size();
+        const auto regval_end_result = content.find(')', regval_params_position);
+        if (regval_end_result == std::string::npos)
+            break;
+        for (size_t iter = regval_params_position;;) {
+            const size_t regval_param_start = content.find('"', iter);
+            if (regval_param_start == std::string::npos || regval_param_start > regval_end_result)
+                break;
+            const auto param_string_start = regval_param_start + 1;
+            const auto regval_param_end = content.find('"', param_string_start);
+            if (regval_param_end == std::string::npos || regval_param_end > regval_end_result)
+                break;
+            iter = regval_param_end + 1;
+            const auto extracted_parameter_string = content.substr(param_string_start, regval_param_end - param_string_start);
+            const std::regex sensor_regex("(\\w|\\/)+\\:\\w+");
+            if (!std::regex_match(extracted_parameter_string, sensor_regex)) {
+                _logger->warn("scan script - \"register_value\" function parameter does not match expected format!");
+                return false;
+            }
+            const auto sensor_value_separator_position = extracted_parameter_string.find(":");
+            const auto sensor_name = std::string("status/") + extracted_parameter_string.substr(0, sensor_value_separator_position);
+            _logger->debug("scan script - adding string \"{}\" to sensor list", sensor_name);
+            sensor_list.emplace(sensor_name);
+        }
+        regval_string_scan_position = regval_end_result + 1;
+    }
+    return true;
+}
+
 void Exe_Service::load_and_run_scripts() {
     auto select_from_script = _statements[0];
     std::vector<std::pair<std::string, std::string>> script_store;
     std::unordered_set<std::string> sensor_list;
 
-    auto sqresult = sqlite3_step(select_from_script);
-    while(sqresult != SQLITE_DONE){
+    for (auto sqresult = sqlite3_step(select_from_script); sqresult != SQLITE_DONE; sqresult = sqlite3_step(select_from_script)) {
         if (sqresult != SQLITE_ROW) {
-            _logger->error("Sqlite error unexpected result {} : {}", sqresult, sqlite3_errmsg(_pDb));
+            _logger->error("Sqlite error unexpected result during script loading {} : {}", sqresult, sqlite3_errmsg(_pDb));
             break;
         }
-        std::string script_name = reinterpret_cast<const char*>(sqlite3_column_text(select_from_script, 0));
-        std::string script_content = reinterpret_cast<const char*>(sqlite3_column_text(select_from_script, 1));
+        const std::string script_name { reinterpret_cast<const char*>(sqlite3_column_text(select_from_script, 0)) };
+        const std::string script_content { reinterpret_cast<const char*>(sqlite3_column_text(select_from_script, 1)) };
         _logger->debug("Script {}  ; Content: {}", script_name, script_content);
         if (scan_script(script_content, sensor_list))
-            script_store.emplace_back(script_name, script_content);
+            script_store.emplace_back(std::move(script_name), std::move(script_content));
         else
             _logger->warn("Script {} - scan error - not adding it - please fix the content so it may pass static analysis", script_name);
-        sqresult = sqlite3_step(select_from_script);
     }
     sqlite3_reset(select_from_script);
-
     for (const auto& sensor : sensor_list)
         Subscribe(sensor);
-
     _terminate_lua_threads = false;
     for (const auto& script : script_store)
         execute_lua_script(script.first, script.second);
@@ -162,34 +157,37 @@ void Exe_Service::start_all() {
 void Exe_Service::stop_all() {
     _logger->trace("stop_all");
     Unsubscribe("#");  // stop reacting to any MQTT message (I hope this works..)
-    _terminate_lua_threads = true;  // issue command to stop all the treads that will wake (in wait function) - they will end with error "terminate requested"
+    _terminate_lua_threads = true;  // issue command to stop all the treads that will wake (in wait function) - they will end with LUA error "terminate requested"
     _logger->trace("lock event map");
-    std::unique_lock<std::mutex> value_wait_lock(_map_mutex);  // get lock to event map and wake all the waiting LUA scripts
-    for (auto && el : _value_wait_map) {  // issue events LUA scripts wait for (wake them)
-        if (el.second != nullptr) {
-            ++el.second->num;
-            el.second->cond_var.notify_all();
-        }
-    }
-    value_wait_lock.unlock();  // release lock so the threads may access the map (they gonna clean it if possible)
+    {  // scope for lock guard
+        std::unique_lock<std::mutex> value_wait_lock(_map_mutex);  // get lock to event map and wake all the waiting LUA scripts
+        for (auto && el : _value_wait_map)  // issue events LUA scripts wait for (wake them)
+            if (el.second != nullptr) {
+                ++el.second->num;
+                el.second->cond_var.notify_all();
+            }
+    } // release lock so the threads may access the map (they gonna clean it if possible)    
     _logger->trace("lock time map");
-    std::unique_lock<std::mutex> time_lock(_time_mutex); // lock the time map and wake all the waiting LUA scripts
-    for (auto && el : _time_wait_map) {
-        if (el.second != nullptr) {  // issue events LUA scripts wait for (wake them)
-            ++el.second->num;
-            el.second->cond_var.notify_all();
-        }
+    {  // scope for lock guard
+        std::unique_lock<std::mutex> time_lock(_time_mutex); // lock the time map and wake all the waiting LUA scripts
+        for (auto && el : _time_wait_map)  // issue events LUA scripts wait time (wake them)
+            if (el.second != nullptr) {
+                ++el.second->num;
+                el.second->cond_var.notify_all();
+            }
     }
-    time_lock.unlock();
     _logger->debug("join script threads");
     for (auto && script : _script_threads)
         script.join();
     _script_threads.clear();
-    value_wait_lock.lock();     // well mosquitto (main) thread may still try to access the map but since it should be already unsubscribed it is highly unprobable scenario, but to be sure...
-    _value_wait_map.clear();    // map should be already clear unless something bad happend but to be sure it's clear.. we may clear it now!
-    value_wait_lock.unlock();
-    time_lock.lock();           // time thread is still running we're not terminating it so the lock here is necessary
-    _time_wait_map.clear();     // this map may be acessed by time thread so lock it be4 emergency cleanup (map should be already clear unless something bad happend but to be sure it's clear.. we may clear it now!)
+    {  // scope for lock guard
+        std::unique_lock<std::mutex> value_wait_lock(_map_mutex);  // well mosquitto (main) thread may still try to access the map but since it should be already unsubscribed it is highly unprobable scenario, but to be sure...
+        _value_wait_map.clear();    // map should be already clear unless something bad happend but to be sure it's clear.. we may clear it now!
+    }
+    {  // scope for lock guard
+        std::unique_lock<std::mutex> time_lock(_time_mutex);  // time thread is still running we're not terminating it so the lock here is necessary
+        _time_wait_map.clear();     // this map may be acessed by time thread so lock it be4 emergency cleanup (map should be already clear unless something bad happend but to be sure it's clear.. we may clear it now!)
+    }
 }
 
 void Exe_Service::main() {
@@ -197,7 +195,7 @@ void Exe_Service::main() {
     load_daemon_configuration();
     if (!sqlite3_threadsafe()) {
         if(sqlite3_config(SQLITE_CONFIG_SERIALIZED)) {
-            _logger->warn("Unable to set serialized mode for SQLite! Tt is necessary to recompile it SQLITE_THREADSAFE!");
+            _logger->warn("Unable to set serialized mode for SQLite! It is necessary to recompile it SQLITE_THREADSAFE!");
             _logger->warn("We Continue using unsafe interface but beware of possible crash");
         }
     }
@@ -212,32 +210,39 @@ void Exe_Service::main() {
     _logger->trace("Exe system initialized");
     start_all();
     _logger->info("--- Threads started ---");
-    std::this_thread::sleep_until(std::chrono::time_point<std::chrono::system_clock>::max());
+    SleepForever();
 }
 
 void Exe_Service::CallBack(const std::string& topic, const std::string& message) {
-    auto topic_type = topic.substr(0, topic.find_first_of('/'));
-    _logger->debug(topic_type);
+    const auto topic_type = topic.substr(0, topic.find_first_of('/'));
     if (topic_type == "status")
         parse_status_message(topic, message);
     else if (topic_type == "app")
         parse_app_message(topic);
+    else
+        _logger->debug("Unhadled topic type {}", topic_type);
     return;
 }
 
 void Exe_Service::parse_app_message(const std::string& topic) {
+    if (topic != kReloadTopic)
+        return; 
+    if (reload_sctripts_future_.valid()) {
+        auto result = reload_sctripts_future_.wait_for(std::chrono::nanoseconds(0));
+        if (result != std::future_status::ready) {
+            _logger->warn("Reload called while another reload already running - ignoring it!");
+            return;  // there is already planned or running realod thread
+        }
+        _logger->debug("Realod future wait successful!");
+    }
     // this is slow so we do it in separate thread because original thread would stop all the reporting to mosquitto
-    std::packaged_task<void(void)> reload_scripts([this](void) {
+    reload_sctripts_future_ = std::async(std::launch::async, [this](void) {
         _logger->trace("----------- Runtime reload -----------");
         stop_all();
         start_all();
         _logger->trace("----------- Reload completed -----------");
+        return true;
     });
-    
-    _logger->debug(topic);
-    if (topic == kReloadTopic) {
-        reload_scripts();
-    }
 }
 
 void Exe_Service::parse_status_message(const std::string& topic, const std::string& message) {
@@ -281,13 +286,12 @@ void Exe_Service::parse_status_message(const std::string& topic, const std::stri
         // notify threads about update AFTER values were already updated in value map!
         std::unique_lock<std::mutex> value_wait_lock(_map_mutex);
         auto range = _value_wait_map.equal_range(sensor_value_name);
-        for (auto it = range.first; it != range.second; ++it) {
-            if (it->second != nullptr) {
+        for (auto it = range.first; it != range.second; ++it)
+            if (it->second) {
                 ++it->second->num;
                 it->second->cond_var.notify_all();
                 it->second = nullptr;
             }
-        }
     }
     json_object_put(message_json_root_object);  // free message object tree
 }
@@ -301,21 +305,21 @@ Exe_Service::~Exe_Service() noexcept {
     for (auto&& statement : _statements)
         sqlite3_finalize(statement);
     int i = 0;
-    for (; i < 2; ++i) {
+    constexpr int sqlite_close_timeout = 5; 
+    for (; i < sqlite_close_timeout; ++i) {
       if (sqlite3_close(_pDb) == SQLITE_OK)
           break;
       std::this_thread::sleep_for(std::chrono::seconds(1));
     }
-    if (i >= 2)
+    if (i >= sqlite_close_timeout)
         _logger->critical("Sqlite exe not closed the way it should - it may be inconsistent!");
 }
 
 int main() {
     try {
         ::tzset();
-        Exe_Service *d = new Exe_Service();
-        d->main();
-        delete d;
+        Exe_Service d;
+        d.main();
     } catch (const std::exception& error) {
         return -1;
     }
@@ -328,15 +332,14 @@ void Exe_Service::time_thread_loop() {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         std::unique_lock<std::mutex> time_lock(_time_mutex);
         if (!_time_wait_map.empty()) {
-            auto now = std::chrono::system_clock::now();
-            for (auto it = _time_wait_map.begin(); it != _time_wait_map.end() && it->first <= now; ++it) {
-                if (it->second != nullptr) {
+            const auto now = std::chrono::system_clock::now();
+            for (auto it = _time_wait_map.begin(); it != _time_wait_map.end() && it->first <= now; ++it)
+                if (it->second) {
                     _logger->trace("time_map event!");
                     ++it->second->num;
                     it->second->cond_var.notify_all();
                     it->second = nullptr;
                 }
-            }
         }
     }
     _logger->trace("time_thread_loop - terminate");

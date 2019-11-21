@@ -22,7 +22,7 @@ set(sources
 )
 
 add_executable(${target} ${sources})
-target_link_libraries(${target} ${OpenZWave} ${UDEV_LIBRARIES} ${CONFIG++_LIBRARY} pthread)
+target_link_libraries(${target} ${OpenZWave} ${UDEV_LIBRARIES} ${CONFIG++_LIBRARY} pthread resolv)
 set_property(TARGET ${target} PROPERTY CXX_STANDARD 11)
 set_property(TARGET ${target} PROPERTY CMAKE_CXX_STANDARD_REQUIRED yes)
 if (${IPO_SUPPORTED})

@@ -1,5 +1,5 @@
 // Copyright: (c) Jaromir Veber 2017-2019
-// Version: 04062019
+// Version: 08072019
 // License: MPL-2.0
 // *******************************************************************************
 //  This Source Code Form is subject to the terms of the Mozilla Public
@@ -61,44 +61,41 @@ class OneWire_Service : public Daemon {
     std::vector<OWDevice> _devices;
     int _ow_driver_address;
     std::string _sensor_name;
-    struct json_tokener* _tokener;
+    struct json_tokener* const _tokener;
 #if defined pigpio_FOUND
-    MaximInterface::piI2CMaster* _i2c;
+    std::unique_ptr<MaximInterface::piI2CMaster> _i2c;
 #elif defined gpiocxx_FOUND
-    MaximInterface::xxI2CMaster* _i2c;
+    std::unique_ptr<MaximInterface::xxI2CMaster> _i2c;
 #endif
-    MaximInterface::DS2482_DS2484* _master;
-    MaximInterface::Sleep* _sleep;
+    std::unique_ptr<MaximInterface::DS2482_DS2484> _master;
+    std::unique_ptr<MaximInterface::Sleep> _sleep;
 };
 
 OneWire_Service::~OneWire_Service() noexcept {
-    if (_master != nullptr)
-        delete _master;
-    _i2c->stop();
-    delete _i2c;
-    delete _sleep;
-    json_tokener_free(_tokener);
+    _master.reset(nullptr);
+    if (_i2c) {
+        _i2c->stop();
+    }
+    if (_tokener)
+        json_tokener_free(_tokener);
 }
 
-OneWire_Service::OneWire_Service(): Daemon("mq_onewire_daemon", "/var/run/mq_onewire_daemon.pid", true), _tokener(json_tokener_new()), _master(nullptr) {}
+OneWire_Service::OneWire_Service(): Daemon("mq_onewire_daemon", "/var/run/mq_onewire_daemon.pid"), _tokener(json_tokener_new()) {}
 
 void OneWire_Service::load_daemon_configuration() {
     static const char* config_file = "/etc/mq_system/mq_onewire_daemon.conf";
-    constexpr int kDefaultDriverAddress = 0x18;
+    static constexpr int kDefaultDriverAddress = 0x18;
 
-    Config cfg;	
+    Config cfg;
     _logger->trace("Load conf");
-    try
-    {
+    try {
         cfg.readFile(config_file);
-    }
-    catch(const FileIOException &fioex)
-    {
-        throw std::runtime_error(std::string("I/O error while reading configuration file"));
-    }
-    catch(const ParseException &pex)
-    {
-        throw std::runtime_error(std::string("Parse error at ") + pex.getFile() + ":" + std::to_string(pex.getLine()) + " - " + pex.getError() );
+    } catch(const FileIOException &fioex) {
+        _logger->error("I/O error while reading configuration file");
+        throw std::runtime_error("");
+    } catch(const ParseException &pex) {
+        _logger->error("Parse error at {}:{} - {}", pex.getFile(), pex.getLine(), pex.getError());
+        throw std::runtime_error("");
     }
     try {
         if (!cfg.exists("driver_address"))
@@ -106,20 +103,21 @@ void OneWire_Service::load_daemon_configuration() {
         else
             cfg.lookupValue("driver_address", _ow_driver_address);
 
-        Setting& sensors = cfg.lookup("sensors");
+        const Setting& sensors = cfg.lookup("sensors");
         for (int i = 0; i < sensors.getLength(); i++) {
             const auto& sensor = sensors[i];
-            std::string sensor_name = sensor.lookup("name");
-            std::string device_id = sensor.lookup("dev_id");
+            const std::string sensor_name = sensor.lookup("name");
+            const std::string device_id = sensor.lookup("dev_id");
             int sensor_interval = 60;
             if (sensor.exists("interval"))
                 sensor_interval = sensor.lookup("interval");
             _devices.emplace_back(sensor_name, device_id, sensor_interval);
         }
     } catch(const SettingNotFoundException &nfex) {
-        throw std::runtime_error(std::string("Setting \"sensors\" not found in configuration file - running daemon without registered sensors is wast of your resources terminating"));
+        _logger->error("Setting \"sensors\" not found in configuration file - running daemon without registered sensors is wast of your resources terminating");
+        throw std::runtime_error("");
     } catch (const SettingTypeException &nfex) {
-        throw std::runtime_error(std::string("Seting type error at: ") + nfex.getPath());
+        _logger->error("Seting type error at: {}", nfex.getPath());
     }
 }
 
@@ -145,20 +143,20 @@ void OneWire_Service::ProcessRomDevice(MaximInterface::SearchRomState& searchSta
 void OneWire_Service::ReadAndProcessDS18B20(OWDevice& device) {
     _logger->debug("Init DS18B20");
     MaximInterface::SelectMatchRom rom(device._rom_id);
-    MaximInterface::DS18B20 dev(*_sleep, *_master, rom);
-    auto result = dev.initialize();
-    if (result) {
-        _logger->error("DS18B20 device init error {}", result.message());
+    MaximInterface::DS18B20 dev(*_sleep.get(), *_master.get() , rom);
+    const auto result_init_dev = dev.initialize();
+    if (result_init_dev) {
+        _logger->error("DS18B20 device init error {}", result_init_dev.message());
         return;
     }
     int measurement = 0;
     _logger->debug("Read temp DS18B20");
-    result = MaximInterface::readTemperature(dev, measurement);
-    if (result) {
-        _logger->error("DS18B20 device error {}", result.message());
+    const auto result_read_temp = MaximInterface::readTemperature(dev, measurement);
+    if (result_read_temp) {
+        _logger->error("DS18B20 device error {}", result_read_temp.message());
         return;
     }
-    double temperature = measurement / 16.0;
+    const double temperature = measurement / 16.0;
     auto temp = json_object_new_array();
     json_object_array_add(temp, json_object_new_double(temperature));
     json_object_array_add(temp, json_object_new_string("°C"));
@@ -173,32 +171,32 @@ void OneWire_Service::main() {
     load_daemon_configuration();
     _logger->debug("Entered main");
 #if defined pigpio_FOUND
-    _i2c = new MaximInterface::piI2CMaster();
+    _i2c.reset(new MaximInterface::piI2CMaster());
 #elif defined gpiocxx_FOUND
-    _i2c = new MaximInterface::xxI2CMaster("/dev/i2c-1", _logger);
+    _i2c.reset(new MaximInterface::xxI2CMaster("/dev/i2c-1", _logger));
 #endif
     _i2c->start(_ow_driver_address);
     // right now we support only DS2482_100 but library (Maxim interface is able to support also DS2482_800 & DS2484
-    // unfortunatly I don't have such devices so I decided not to write code to support them bacuse I cant't verify if it works..
+    // unfortunatly I don't have such devices so I decided not to write code to support them because I cant't verify if it works..
     // if someone have such devics we cand prepare working version to support also the other masters
-    _master	= new MaximInterface::DS2482_100(*_i2c, _ow_driver_address);
-    auto result = _master->initialize();
-    if (result) {
-        _logger->critical("Device init failed with error {}", result.message());
+    _master.reset(new MaximInterface::DS2482_100(*_i2c.get(), _ow_driver_address));
+    const auto result_init_master = _master->initialize();
+    if (result_init_master) {
+        _logger->critical("Device init failed with error {}", result_init_master.message());
         return;
     }
     _logger->trace("Device init OK");
     MaximInterface::SearchRomState searchState;
     do {
-        auto result = MaximInterface::searchRom(*_master, searchState);
-        if (result) {
-            _logger->error("Device error {}", result.message());
+        const auto result_search_rom = MaximInterface::searchRom(*_master.get(), searchState);
+        if (result_search_rom) {
+            _logger->error("Device error {}", result_search_rom.message());
             break;
         }
         if (MaximInterface::valid(searchState.romId)) {
             ProcessRomDevice(searchState);
         }
-    } while (searchState.lastDevice == false);
+    } while (!searchState.lastDevice);
     _logger->trace("Rom Search Finshed");
     for (auto iterator = _devices.begin(); iterator != _devices.end(); ++iterator)
         if (!iterator->_found) {
@@ -209,13 +207,13 @@ void OneWire_Service::main() {
         _logger->warn("No device in devices list - terminating daemon - no reason to run");
         return;
     }
-    _sleep = new MaximInterface::pigpio::Sleep();
+    _sleep.reset(new MaximInterface::pigpio::Sleep());
 
     while(true) {
         auto now = std::chrono::steady_clock::now();
         for (auto&& device : _devices) {
             auto diff = now - device._last_refresh;
-            double seconds_since_last_refresh = diff.count() / 1000000000.0;
+            const double seconds_since_last_refresh = diff.count() / 1000000000.0;
             _logger->debug("Last refresh {} s", seconds_since_last_refresh);
             if (seconds_since_last_refresh > device._interval) {
                 switch (MaximInterface::familyCode(device._rom_id)) {
@@ -233,7 +231,7 @@ void OneWire_Service::main() {
         }
         double next_refresh = std::numeric_limits<double>::max();
         for (const auto& device : _devices) {
-            double seconds_since_last_refresh = (now - device._last_refresh).count() / 1000000000.0;
+            const double seconds_since_last_refresh = (now - device._last_refresh).count() / 1000000000.0;
             if (next_refresh > (device._interval - seconds_since_last_refresh))
                 next_refresh = device._interval - seconds_since_last_refresh;
         }
@@ -246,11 +244,10 @@ void OneWire_Service::main() {
 
 int main() {
     try {
-        OneWire_Service* d = new OneWire_Service();
-        d->main();
-        delete d;
+        OneWire_Service d;
+        d.main();
     } catch (const std::runtime_error& error) {
-        return -2;
+        return -1;
     }
     return 0;
 }

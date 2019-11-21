@@ -14,6 +14,7 @@
 #define ${META_PROJECT_ID}_VERSION             "@META_VERSION@"
 #define ${META_PROJECT_ID}_NAME_VERSION        "@META_NAME_VERSION@"
 
+#define DAEMON_MANAGER                         @DAEMON_MANAGER@
 #cmakedefine gpiocxx_FOUND
 #cmakedefine i2cxx_FOUND
 #cmakedefine pigpio_FOUND

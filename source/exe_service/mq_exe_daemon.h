@@ -48,18 +48,27 @@ public:
         std::atomic<size_t> num;
     };
 
-    struct LuaValue {
-        explicit LuaValue(int b) { set_value_b(b); }
-        explicit LuaValue(lua_Number n) { set_value_n(n); }
+    class LuaValue {
+    public:
+        enum class LuaType {
+            NUMBER,
+            BOOLEAN,
+        };
+
+        inline explicit LuaValue(bool b) : luatype_{ LuaType::BOOLEAN }, value_{ b } {}
+        inline explicit LuaValue(lua_Number n) : luatype_{ LuaType::NUMBER }, value_{ n } {}
         
-        void set_value_n(lua_Number number) { _luatype = LUA_TNUMBER; _value.number = number; }
-        void set_value_b(int b) { _luatype = LUA_TBOOLEAN; _value.boolean = b; }
-        
-        int _luatype;
-        union {
-            int boolean;
+        inline LuaType get_type() const noexcept { return luatype_; }
+        inline bool get_value_bool() const noexcept {assert(get_type() == LuaType::BOOLEAN); return value_.boolean; }
+        inline bool get_value_number() const noexcept {assert(get_type() == LuaType::NUMBER); return value_.number; }
+    private:
+        const LuaType luatype_;
+        const union U {
+            inline explicit U(bool b) : boolean {b} {}
+            inline explicit U(lua_Number n) :number {n} {}
+            bool boolean;
             lua_Number number;
-        } _value;
+        } value_;
     };
 
     static const std::array<std::string, 1 > kTableDefinitions;
@@ -70,7 +79,7 @@ public:
     std::vector<sqlite3_stmt *> _statements;
     std::string _db_uri;
     sqlite3* _pDb;
-    struct json_tokener* _tokener;
+    struct json_tokener* const _tokener;
 
     void load_daemon_configuration();
     void check_and_init_database();
@@ -92,12 +101,15 @@ public:
     std::unordered_multimap<std::string, SynchronizationObject*> _value_wait_map;
 
     std::mutex _time_mutex;
-    std::multimap<std::chrono::system_clock::time_point, SynchronizationObject*> _time_wait_map;  // we need std::multimap coz it shall be sorted in order to make the sequential search in time thread possible
+    std::multimap<std::chrono::system_clock::time_point, SynchronizationObject*> _time_wait_map;  // we need (ordered) std::multimap coz it shall be sorted in order to make the sequential search in time thread possible (easy)
 
+    // there is a lot of in-memory key-value databeses :)
     std::mutex _value_mutex;
     std::unordered_map<std::string, double> _last_val_double_map;
     std::unordered_map<std::string, bool> _last_val_boolean_map;
     
     std::mutex _global_mutex;
-    std::unordered_map<std::string, LuaValue> _global_map;
+    std::unordered_map<std::string, const LuaValue> _global_map;
+
+    std::future<bool> reload_sctripts_future_;
 };

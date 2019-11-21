@@ -36,12 +36,12 @@ using namespace libconfig;
 
 class ZWLog : public OpenZWave::i_LogImpl {
 public:
-    ZWLog (std::shared_ptr<spdlog::logger>& loger,LogLevel log_level = LogLevel::LogLevel_Alert): _level(log_level), _logger(loger) {}
+    ZWLog (const std::shared_ptr<spdlog::logger>& loger,LogLevel log_level = LogLevel::LogLevel_Alert): _level(log_level), _logger(loger) {}
     virtual ~ZWLog() { }
     virtual void Write (LogLevel _logLevel, uint8 const _nodeId, char const *_format, va_list _args) {
         if (_logLevel > _level) return;
-        char lineBuf[1024] = {0};
-        if ( _format != NULL && _format[0] != '\0') {
+        char lineBuf[1024] = {};
+        if ( _format && _format[0] != '\0') {
             va_list saveargs;
             va_copy(saveargs, _args);
             vsnprintf(lineBuf, sizeof(lineBuf), _format, _args);
@@ -49,13 +49,13 @@ public:
             _logger->info("ZWLog({}):{}: {}", LogLevelString[_logLevel], _nodeId, lineBuf);
         }
     }
-    virtual void QueueDump () {} 
+    virtual void QueueDump () {}
     virtual void QueueClear () {} 
-    virtual void SetLoggingState (LogLevel _saveLevel, LogLevel _queueLevel, LogLevel _dumpTrigger) { _level = _saveLevel; }
-    virtual void SetLogFileName (const string &_filename) {}
+    virtual void SetLoggingState (LogLevel _saveLevel, LogLevel, LogLevel) { _level = _saveLevel; }
+    virtual void SetLogFileName (const string& ) {}
 private:
     LogLevel _level;
-    std::shared_ptr<spdlog::logger> _logger;
+    const std::shared_ptr<spdlog::logger> _logger;
 };
 
 class Zwave_Service : public Daemon {
@@ -66,7 +66,7 @@ class Zwave_Service : public Daemon {
     virtual void CallBack(const std::string& topic, const std::string& message) override;
     virtual ~Zwave_Service() noexcept;
  private:
-    struct json_object* ozw_value_to_json_object(ValueID &value);
+    struct json_object* ozw_value_to_json_object(const ValueID &value) const;
     void load_daemon_configuration(std::string& zw_driver_path, std::string& zw_config_path, std::string& zw_network_data_path);
     void peprare_data_structures();
     void main_loop();
@@ -109,7 +109,7 @@ class Zwave_Service : public Daemon {
     struct json_tokener* _tokener;
 };
 
-Zwave_Service::Zwave_Service(): Daemon("mq_zwave_daemon", "/var/run/mq_zwave_daemon.pid"), _home_id(std::numeric_limits<uint32_t>::max()), _initialized(false), _tokener(json_tokener_new()) {}
+Zwave_Service::Zwave_Service(): Daemon("mq_zwave_daemon", "/var/run/mq_zwave_daemon.pid"), _home_id(std::numeric_limits<uint32_t>::max()), _initialized(false), _tokener(json_tokener_new()), _manager(nullptr) {}
 
 void Zwave_Service::load_daemon_configuration(std::string& zw_driver_path, std::string& zw_config_path, std::string& zw_network_data_path) {
     static const char* kConfig_file = "/etc/mq_system/mq_zwave_daemon.conf";
@@ -122,18 +122,18 @@ void Zwave_Service::load_daemon_configuration(std::string& zw_driver_path, std::
 
     try {
         cfg.readFile(kConfig_file);
-    } catch(const FileIOException &fioex) {
+    } catch(const FileIOException& fioex) {
         _logger->error("I/O error while reading system configuration file: {}", kConfig_file);
         throw std::runtime_error("");
-    } catch(const ParseException &pex) {
+    } catch(const ParseException& pex) {
         _logger->error("Parse error at {} : {} - {}", pex.getFile(), pex.getLine(), pex.getError());
         throw std::runtime_error("");
     }
     try {
-        if  (cfg.exists("log_level")) {
+        if (cfg.exists("log_level")) {
             int level;
             cfg.lookupValue("log_level", level);
-            _logger->set_level(static_cast<spdlog::level::level_enum>(level));		
+            _logger->set_level(static_cast<spdlog::level::level_enum>(level));
         }
         if (!cfg.exists("driver_path"))
             zw_driver_path = kDefaultDriverPath;
@@ -148,14 +148,11 @@ void Zwave_Service::load_daemon_configuration(std::string& zw_driver_path, std::
         else
             cfg.lookupValue("network_data_path", zw_network_data_path);
         Setting& sensors = cfg.lookup("sensors");
-        for (int i = 0; i < sensors.getLength(); i++) {
-            const auto& sensor = sensors[i];
-            std::string sensor_name = sensor.lookup("name");
+        for (const auto& sensor : sensors) {
+            const std::string sensor_name = sensor.lookup("name");
             decltype(_sensors)::value_type inner(sensor_name);
-            const auto& values = sensor.lookup("values");
-            for (int j = 0; j < values.getLength(); ++j) {
-                const auto& value = values[j];
-                long long unsigned int value_id = value.lookup("value_id");
+            for (const auto& value : sensor.lookup("values")) {
+                const unsigned long long value_id = value.lookup("value_id");
                 bool value_read = false;                
                 if (value.exists("status"))
                      value.lookupValue("status", value_read);
@@ -174,10 +171,10 @@ void Zwave_Service::load_daemon_configuration(std::string& zw_driver_path, std::
             }
             _sensors.emplace_back(inner);
         }
-    } catch(const SettingNotFoundException &nfex) {
+    } catch(const SettingNotFoundException& nfex) {
         _logger->error("Required setting not found in system configuration file");
         throw std::runtime_error("");
-    } catch (const SettingTypeException &nfex) {
+    } catch (const SettingTypeException& nfex) {
         _logger->error("Seting type error (at system configuaration) at: {}", nfex.getPath());
         throw std::runtime_error("");
     }
@@ -185,30 +182,32 @@ void Zwave_Service::load_daemon_configuration(std::string& zw_driver_path, std::
 
 void Zwave_Service::CallBack(const std::string& topic, const std::string& message){
     _logger->trace("callback notification {}", topic);
-    const auto& sensor_map_iterator = _sensor_name_map.find(topic);
+    const auto found_sensor_iterator = _sensor_name_map.find(topic);
     // ignore all messages not related to listed sensors
-    if (sensor_map_iterator == _sensor_name_map.cend())
+    if (found_sensor_iterator == _sensor_name_map.cend())
         return;
-    struct json_object* json_root_object = json_tokener_parse_ex(_tokener, message.c_str(), message.size());
+    auto json_root_object = json_tokener_parse_ex(_tokener, message.c_str(), message.size());
     if (json_object_get_type(json_root_object) != json_type_object) {
         _logger->warn("Did not receive object as initial json type - bad json format: {}", message);
+        json_object_put(json_root_object);
         return;
     }
     json_object_object_foreach(json_root_object, current_key, current_object) {
-        auto current_value_iterator = std::find_if(sensor_map_iterator->second->values.cbegin(),sensor_map_iterator->second->values.cend(), [current_key](struct ValueData j){ return j.label == current_key; });
-        if (current_value_iterator == sensor_map_iterator->second->values.cend()) {
+        const auto& found_sensor_data = found_sensor_iterator->second;
+        auto current_value_iterator = std::find_if(found_sensor_data->values.cbegin(), found_sensor_data->values.cend(), [current_key](const ValueData& value){ return value.label == current_key; });
+        if (current_value_iterator == found_sensor_data->values.cend()) {
             _logger->debug("Value {} not found (registered) on sensor {} - so it was not written", current_key, topic);
             continue;
         }
-        auto object_type = json_object_get_type(current_object);
-        if (object_type == json_type_array) {  // it may be an array - [value, unit]; we don't care about unit much here; so extract only the value
+        auto current_object_type = json_object_get_type(current_object);
+        if (current_object_type == json_type_array) {  // it may be an array - [value, unit]; we don't care about unit much here; so extract only the value
             current_object = json_object_array_get_idx(current_object, 0);
-            if (current_object == NULL)
+            if (!current_object)
                 continue;
-            object_type = json_object_get_type(current_object);
+            current_object_type = json_object_get_type(current_object);
         }
         try {
-            switch (object_type) {
+            switch (current_object_type) {
                 case json_type_double:
                     _logger->trace("SetValue {} double {}", topic, json_object_get_double(current_object));
                     _manager->SetValue(current_value_iterator->val, static_cast<float>(json_object_get_double(current_object)));  // what happen if ZW is not expecting double?? TODO
@@ -249,12 +248,13 @@ void Zwave_Service::CallBack(const std::string& topic, const std::string& messag
                     _manager->SetValue(current_value_iterator->val,std::string(json_object_get_string(current_object)));
                     break;
                 default:
-                    _logger->warn("Unhanded {} JSON type - TODO?", object_type);
+                    _logger->warn("Unhanded {} JSON type - TODO?", current_object_type);
             }
         } catch (OZWException& e) {
             _logger->warn("Exception caught while setting ZW value: {}", e.GetMsg());
         }
-    } 
+    }
+    json_object_put(json_root_object); 
 }
 
 static void OnNotification(Notification const *pNotification, void *context) {
@@ -262,8 +262,8 @@ static void OnNotification(Notification const *pNotification, void *context) {
 }
 
 void Zwave_Service::peprare_data_structures() {
-    _logger->trace("Setup value id's");    
-    std::chrono::time_point<std::chrono::steady_clock> requested_time = std::chrono::steady_clock::now();
+    _logger->trace("Setup value id's");
+    auto requested_time = std::chrono::steady_clock::now();
     std::list<std::pair<unsigned char, decltype(requested_time)>> status_map;
     // init value IDs of sensor_values and prepare initialization map (status_map)
     for (auto&& sensor : _sensors)
@@ -271,26 +271,27 @@ void Zwave_Service::peprare_data_structures() {
             sensor_value.val = ValueID(_home_id, (uint64) sensor_value.raw_val);
             status_map.emplace_back(sensor_value.val.GetNodeId(), requested_time);
         }
-
     _logger->trace("Wait until all sensors are ready");
-    while (!status_map.empty()) { // this may take up to 10 minutes!
+    while (!status_map.empty()) { // this may take up to 10 minutes (in case of uninitialized Z-Wave network)!
         auto now = std::chrono::steady_clock::now();
-        for (auto status_map_iterator = status_map.begin(); status_map_iterator != status_map.end(); ) {
-            auto since_last_check = (now - status_map_iterator->second).count() / 1000000000.0;
-            _logger->debug("Node status {} {}", status_map_iterator->first, since_last_check);
+        for (auto status_map_iterator = status_map.cbegin(); status_map_iterator != status_map.cend(); ) {
+            auto seconds_since_last_check = (now - status_map_iterator->second).count() / 1000000000.0;
+            _logger->debug("Node status {} {}", status_map_iterator->first, seconds_since_last_check);
             if (_manager->IsNodeInfoReceived(_home_id, status_map_iterator->first)) {
                 status_map_iterator = status_map.erase(status_map_iterator);
-                _logger->debug("Node info recieved after {} seconds", since_last_check);
+                _logger->debug("Node info recieved after {} seconds", seconds_since_last_check);
             } else {
-                if (since_last_check >= 600.0) {  // we wait max 10 mins
+                if (seconds_since_last_check >= 600.0) {  // we wait max 10 mins
                     if (_manager->IsNodeFailed(_home_id, status_map_iterator->first))
                         _logger->warn("Node {} is failed removing it (it wont't work - fix it (in mangement program?) and restart daemon)!", status_map_iterator->first);
                     else if (!_manager->IsNodeAwake(_home_id, status_map_iterator->first))
                         _logger->warn("Node {} is sleeping removing it (it wont't work - pls wake it manually and restart daemon)!", status_map_iterator->first);
                     else
-                        _logger->error("Node {} info not received yet after {} second (unexpected behavior) node is not sleeping and not failed (probably non-existant valueid)", status_map_iterator->first, since_last_check);
+                        _logger->error("Node {} info not received yet after {} second (unexpected behavior) node is not sleeping and not failed (probably non-existant valueid)", status_map_iterator->first, seconds_since_last_check);
                     // cleanup values for nodes without Nodeinfo
                     for (auto sensor_iterator = _sensors.begin(); sensor_iterator != _sensors.end(); ) {
+                        //std::remove_if(sensor_iterator->values.begin(), sensor_iterator->values.end(),
+                        //        [status_map_iterator](const ValueData& element){ return element.val.GetNodeId() == status_map_iterator->first; });    // this one shows the intent but requires assignment operator that is not declared for ValueData...
                         for (auto value_iterator = sensor_iterator->values.begin(); value_iterator != sensor_iterator->values.end(); ) {
                             if (value_iterator->val.GetNodeId() == status_map_iterator->first)
                                 value_iterator = sensor_iterator->values.erase(value_iterator);
@@ -346,32 +347,31 @@ void Zwave_Service::main_loop() {
     while ( true ) {
         float next_refresh = 600.0f;
         auto now = std::chrono::steady_clock::now();
-        for (auto&& sensor : _sensors)
+        for (const auto& sensor : _sensors)
             for (auto&& sensor_value : sensor.values) {
                 if (!sensor_value.refresh)
                     continue;
                 if (_manager->IsNodeFailed(_home_id, sensor_value.val.GetNodeId()))	 // ignore failed nodes
                     continue;
-                auto since_last_refresh = static_cast<double>((now - sensor_value.last_refresh).count()) / 1000000000.0;
-                if (since_last_refresh > sensor_value.refresh) {
+                auto sec_since_last_refresh = static_cast<double>((now - sensor_value.last_refresh).count()) / 1000000000.0;
+                if (sec_since_last_refresh > sensor_value.refresh) {
                     _manager->RefreshValue(sensor_value.val);
-                    since_last_refresh = 0.0;
-                    _logger->debug("Normal Refresh value on node {} since last refresh {}", sensor_value.val.GetNodeId(), since_last_refresh);
+                    sec_since_last_refresh = 0.0;
+                    _logger->debug("Normal Refresh value on node {} since last refresh {}", sensor_value.val.GetNodeId(), sec_since_last_refresh);
                 }
-                if (since_last_refresh > sensor_value.refresh) {
+                if (sec_since_last_refresh > sensor_value.refresh) {
                     next_refresh = 2.1f;
-                    _logger->debug("Node {} Req Refresh 0 {}; Ref {}; Since Last {} ", sensor_value.val.GetNodeId(), next_refresh, sensor_value.refresh, since_last_refresh);
-                } else if ((sensor_value.refresh - since_last_refresh) < next_refresh) {
-                    next_refresh = sensor_value.refresh - since_last_refresh;
-                    _logger->debug("Node {} Req Refresh 1 {}; Ref {}; Since Last {} ", sensor_value.val.GetNodeId(), next_refresh, sensor_value.refresh, since_last_refresh);
+                    _logger->debug("Node {} Req Refresh 0 {}; Ref {}; Since Last {} ", sensor_value.val.GetNodeId(), next_refresh, sensor_value.refresh, sec_since_last_refresh);
+                } else if ((sensor_value.refresh - sec_since_last_refresh) < next_refresh) {
+                    next_refresh = sensor_value.refresh - sec_since_last_refresh;
+                    _logger->debug("Node {} Req Refresh 1 {}; Ref {}; Since Last {} ", sensor_value.val.GetNodeId(), next_refresh, sensor_value.refresh, sec_since_last_refresh);
                 } else {
-                    _logger->debug("Node {} Refresh Next {}; Ref {}; Since Last {} ", sensor_value.val.GetNodeId(), (sensor_value.refresh - since_last_refresh), sensor_value.refresh, since_last_refresh);
+                    _logger->debug("Node {} Refresh Next {}; Ref {}; Since Last {} ", sensor_value.val.GetNodeId(), (sensor_value.refresh - sec_since_last_refresh), sensor_value.refresh, sec_since_last_refresh);
                 }
             }
         if (_last_refresh - now > std::chrono::hours(24)) {
             _last_refresh = now;
             _manager->HealNetwork(_home_id , true);
-            _manager->WriteConfig(_home_id);
         }
         if (next_refresh < 2.1f)
             next_refresh = 2.1f;
@@ -389,16 +389,16 @@ void Zwave_Service::main() {
         auto zw_log = new ZWLog(_logger);  // setup custom logging interface - to see the messages also in MQ_System logging interface
         zw_log->SetLoggingState(LogLevel_Alert, LogLevel_Alert, LogLevel_Alert);
         Log::SetLoggingClass(zw_log);
-        _logger->debug("Options Create");
+        _logger->trace("Options Create");
         Options::Create(zw_config_path, zw_network_data_path, "")->Lock();
-        _logger->debug("Manager Create");
+        _logger->trace("Manager Create");
         _manager = Manager::Create();
-        if (_manager == NULL) {
+        if (!_manager) {
             _logger->critical("Manager Create failed!");
             return;
         }
         _manager->AddWatcher(OnNotification, this);
-        _logger->debug("Add Driver");
+        _logger->trace("Add Driver");
         if (!_manager->AddDriver(_zw_driver_path))
             _logger->warn("Driver add error.. driver already exists {}", _zw_driver_path);
         _logger->trace("ZWave initialization");
@@ -414,7 +414,7 @@ void Zwave_Service::main() {
             _logger->debug("Main loop");
             main_loop();
         }
-    } catch (OZWException & oze) {
+    } catch (OZWException& oze) {
         _logger->error("OpenZWave exception {}", oze.GetMsg());
     }
 }
@@ -434,39 +434,41 @@ void Zwave_Service::on_notification(Notification const *pNotification) {
                     _logger->trace ("Value event - system not initialized break");
                     break;
                 }
-                auto value = pNotification->GetValueID();                
-                auto sensor_id_map_iterator = _sensor_id_map.find(value.GetId());
-                if (sensor_id_map_iterator != _sensor_id_map.end()) {
-                    auto sensor_value_iterator = sensor_id_map_iterator->second;
-                    auto now = std::chrono::steady_clock::now();
-                    std::chrono::duration<float> diff = now - sensor_value_iterator->last_refresh;
-                    if (static_cast<uint32_t>(diff.count()) < sensor_value_iterator->refresh_limit){
-                        _logger->trace ("Value event - refresh limit break");
-                        break;
-                    }
-                    sensor_value_iterator->last_refresh = now;
-                    auto json_value_object = ozw_value_to_json_object(value);
-                    if (json_value_object != nullptr) {
-                        struct json_object* temp = nullptr;
-                        if (sensor_value_iterator->units.empty())
-                            temp = json_value_object;
-                        else {
-                            temp = json_object_new_array();
-                            json_object_array_add(temp, json_value_object);
-                            json_object_array_add(temp, json_object_new_string(sensor_value_iterator->units.c_str()));
-                        }
-                        struct json_object* j_object = json_object_new_object();
-                        json_object_object_add(j_object, sensor_value_iterator->label.c_str(), temp);
-                        const char* json_string = json_object_to_json_string_ext(j_object, JSON_C_TO_STRING_PLAIN);
-                        if (json_string == nullptr) {
-                                _logger->warn ("Value event - unable to covert JSON to string");
-                                break;
-                        }
-                        std::this_thread::sleep_for(std::chrono::seconds(1));
-                        Publish(std::string("status/") + sensor_value_iterator->sensor_name, std::string(json_string));
-                        json_object_put(j_object);
-                    }
+                const auto value = pNotification->GetValueID();                
+                const auto sensor_search_result = _sensor_id_map.find(value.GetId());
+                if (sensor_search_result == _sensor_id_map.end())
+                    break;
+                auto found_value_data = sensor_search_result->second;
+                const auto now = std::chrono::steady_clock::now();
+                const std::chrono::duration<float> diff = now - found_value_data->last_refresh;
+                if (static_cast<uint32_t>(diff.count()) < found_value_data->refresh_limit){
+                    _logger->trace ("Value event - refresh limit break");
+                    break;
                 }
+                found_value_data->last_refresh = now;
+                auto json_value_object = ozw_value_to_json_object(value);
+                if (!json_value_object) {
+                    _logger->warn ("Unable to convert ZW value to JSON value");
+                    break;
+                }
+                auto temp = [&]() { 
+                    if (found_value_data->units.empty())
+                        return json_value_object;
+                    auto arr = json_object_new_array();
+                    json_object_array_add(arr, json_value_object);
+                    json_object_array_add(arr, json_object_new_string(found_value_data->units.c_str()));
+                    return arr;
+                }();
+                auto j_object = json_object_new_object();
+                json_object_object_add(j_object, found_value_data->label.c_str(), temp);
+                const char* json_string = json_object_to_json_string_ext(j_object, JSON_C_TO_STRING_PLAIN);
+                if (!json_string) {
+                    _logger->warn ("Value event - unable to covert JSON to string");
+                    json_object_put(j_object);
+                    break;
+                }
+                Publish(std::string("status/") + found_value_data->sensor_name, std::string(json_string));
+                json_object_put(j_object);
                 break;
             }
             case Notification::NotificationType::Type_NodeEvent:
@@ -474,7 +476,7 @@ void Zwave_Service::on_notification(Notification const *pNotification) {
                 _logger->info("Node event");
                 break;
             }
-            case Notification::NotificationType::Type_SceneEvent:
+            case Notification::NotificationType::Type_SceneEvent:  // maybe remove in future (Scenes API Deprecated in 1.6 of library)
             {
                 _logger->info("Scene event ");
                 break;
@@ -499,58 +501,51 @@ void Zwave_Service::on_notification(Notification const *pNotification) {
     }
 }
 
-struct json_object* Zwave_Service::ozw_value_to_json_object(ValueID &value) {
-    struct json_object* json_value_object = nullptr;
+struct json_object* Zwave_Service::ozw_value_to_json_object(const ValueID &value) const {
     switch (value.GetType()) {
         case ValueID::ValueType::ValueType_Decimal: {
             float data = 0.0;
             _manager->GetValueAsFloat(value, &data);
-            json_value_object = json_object_new_double(data);
-            break;
+            return json_object_new_double(data);
         }
         case ValueID::ValueType::ValueType_Byte: {
             uint8_t data = 0;
             _manager->GetValueAsByte(value, &data);
-            json_value_object = json_object_new_int(static_cast<int32_t>(data));
-            break;
+            return json_object_new_int(static_cast<int32_t>(data));
         }
         case ValueID::ValueType::ValueType_Short: {
             int16_t data = 0;
             _manager->GetValueAsShort(value, &data);
-            json_value_object = json_object_new_int(static_cast<int32_t>(data));
-            break;
+            return json_object_new_int(static_cast<int32_t>(data));
         }
         case ValueID::ValueType::ValueType_Int: {
             int32_t data = 0;
             _manager->GetValueAsInt(value, &data);
-            json_value_object = json_object_new_int(data);
-            break;
+            return json_object_new_int(data);
         }
         case ValueID::ValueType::ValueType_Bool:
         case ValueID::ValueType::ValueType_Button: {
             bool data = false;
             _manager->GetValueAsBool(value, &data);
-            json_value_object = json_object_new_boolean(data); 
-            break;
+            return json_object_new_boolean(data); 
         }
         case ValueID::ValueType::ValueType_String: {
             std::string data;
             _manager->GetValueAsString(value, &data);
-            json_value_object = json_object_new_string(data.c_str());
-            break;
+            return json_object_new_string(data.c_str());
         }
         case ValueID::ValueType::ValueType_List:
         case ValueID::ValueType::ValueType_Schedule:
         case ValueID::ValueType::ValueType_Raw:
         default:
             _logger->warn("Value type {} not handled - TODO devel", value.GetType());
-            break;
+            return nullptr;
     }
-    return json_value_object;
 }
 
 Zwave_Service::~Zwave_Service() noexcept {
     _manager->RemoveWatcher(OnNotification, this);
+    std::this_thread::sleep_for(std::chrono::seconds(1));
     Unsubscribe("#");  //unsubscribe all - makes it safe because we destroy lot of objects that might by used by concurent thread.
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     _manager->RemoveDriver(_zw_driver_path);
@@ -562,9 +557,8 @@ Zwave_Service::~Zwave_Service() noexcept {
 
 int main() {
     try {
-        Zwave_Service* d = new Zwave_Service();
-        d->main();
-        delete d;
+        Zwave_Service d;
+        d.main();
     } catch (const std::runtime_error& error) {
         return -1;
     }
