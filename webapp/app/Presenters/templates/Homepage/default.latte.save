@@ -1,0 +1,38 @@
+{block content}
+	<script type="text/javascript">
+		$( "#text" ).append("Location: ");
+                $( "#text" ).append(window.location.hostname);
+		$( "#text" ).append(" Port: ");
+		$( "#text" ).append(Number(window.location.port));
+		client = new Paho.MQTT.Client(window.location.hostname, Number(window.location.port) , "/ws/", "clientId");
+		var options = { 
+		     //connection attempt timeout in seconds
+		     timeout: 3,
+ 
+		     //Gets Called if the connection has successfully been established
+		     onSuccess: function () {
+		         alert("Connected");
+		     },
+ 
+		     //Gets Called if the connection could not be established
+		     onFailure: function (message) {
+		         alert("Connection failed: " + message.errorMessage);
+		     }
+		};
+		//Attempt to connect
+		client.connect(options);
+
+	</script>
+	<p id="text">
+		
+	</p>
+	{foreach $posts as $post}
+		<div class="sensor">
+			<span class="value_time">{$post->timestamp|date:'%c'}</span>
+			<span class="value_name">{$post->name->name}</span>
+			<span class="value">{$post->value|number:2}</span>
+			<span class="units">{$post->units->name}</span>
+			<span class="sensor_name">{$post->sensor->name}</span>
+		</div>
+	{/foreach}
+{/block}

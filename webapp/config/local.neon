@@ -1,0 +1,23 @@
+parameters:
+
+security:
+    users:
+        user1: c477b...
+
+database:
+    database:
+        dsn: 'sqlite:/var/db/mq_system.db'
+        debugger: true
+        explain: true
+        autowired: true
+    log:
+        dsn: 'sqlite:/var/db/mq_log.db'
+        debugger: true
+        explain: true
+    script:
+        dsn: 'sqlite:/var/db/mq_exe_system.db'
+        debugger: true
+        explain: true
+
+extensions:
+  tbDatePicker: RadekDostal\NetteComponents\DateTimePicker\DateTimePicker\DI\DateTimePickerExtension
