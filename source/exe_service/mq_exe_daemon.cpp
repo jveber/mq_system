@@ -1,5 +1,5 @@
 // Copyright: (c) Jaromir Veber 2018-2019
-// Version: 01042019
+// Version: 13122019
 // License: MPL-2.0
 // *******************************************************************************
 //  This Source Code Form is subject to the terms of the Mozilla Public
@@ -11,10 +11,11 @@
 
 #include <stdexcept>    // for excpetion
 #include <regex>        // regex_match
-#include <future>       // async
 #include <ctime>
 
 #include "mq_exe_daemon.h"
+
+using namespace libconfig;
 
 void time_thread_start(Exe_Service *exe_service) {
     exe_service->time_thread_loop();
@@ -85,7 +86,8 @@ void Exe_Service::check_and_init_database() {
 // This scans @content for "register_value(" and than tries to find it's string parameters, match them with regex and store them into @sensor_list
 /**
  * Right now this scan works well; however it does not work with LUA comments. It is kind of complicated to implement it so right now we 
- * accept this feature (BUG?) as it is. It should not affect users too much - if it is at least documented.
+ * accept this feature (BUG?) as it is. It should not affect users too much - if it is at least documented. 
+ * Another way might be completely fresh script setup with void functions exept register_value that whould get registered and that whould record parameters.
  */
 bool Exe_Service::scan_script(const std::string& content, std::unordered_set<std::string>& sensor_list) {
     for (size_t regval_string_scan_position = 0; regval_string_scan_position != std::string::npos; ) {
@@ -226,7 +228,7 @@ void Exe_Service::CallBack(const std::string& topic, const std::string& message)
 
 void Exe_Service::parse_app_message(const std::string& topic) {
     if (topic != kReloadTopic)
-        return; 
+        return;
     if (reload_sctripts_future_.valid()) {
         auto result = reload_sctripts_future_.wait_for(std::chrono::nanoseconds(0));
         if (result != std::future_status::ready) {
@@ -331,6 +333,7 @@ void Exe_Service::time_thread_loop() {
     while ( !_terminate_time_thread ) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         std::unique_lock<std::mutex> time_lock(_time_mutex);
+        // _logger->trace("time_thread tick");
         if (!_time_wait_map.empty()) {
             const auto now = std::chrono::system_clock::now();
             for (auto it = _time_wait_map.begin(); it != _time_wait_map.end() && it->first <= now; ++it)

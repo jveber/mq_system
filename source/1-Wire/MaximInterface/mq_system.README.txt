@@ -1,4 +1,0 @@
-As a library for 1-Wire i choose MaximInterface (library) this library is obtainable from:
-	https://developer-sjc-indigo-border.mbed.org/teams/Maxim-Integrated/code/MaximInterface/
-	https://os.mbed.com/teams/Maxim-Integrated/code/MaximInterface/
-It does support some onewire devices others may need to be added... yet I can support only devices I have and I can test!

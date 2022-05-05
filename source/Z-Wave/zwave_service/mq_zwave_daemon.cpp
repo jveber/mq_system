@@ -96,7 +96,7 @@ class Zwave_Service : public Daemon {
         // Also take care about the refresh value. If you refresh it too often it might deplete sensor battery, and overload the Z-Wave network.
         const uint32_t refresh;
     };
-	
+
     struct SensorData {
         SensorData(const std::string &n): name(n) {}
         const std::string name;
@@ -153,7 +153,7 @@ void Zwave_Service::load_daemon_configuration(std::string& zw_driver_path, std::
             decltype(_sensors)::value_type inner(sensor_name);
             for (const auto& value : sensor.lookup("values")) {
                 const unsigned long long value_id = value.lookup("value_id");
-                bool value_read = false;                
+                bool value_read = false;
                 if (value.exists("status"))
                      value.lookupValue("status", value_read);
                 bool value_write = false;
@@ -476,7 +476,7 @@ void Zwave_Service::on_notification(Notification const *pNotification) {
                 _logger->info("Node event");
                 break;
             }
-            case Notification::NotificationType::Type_SceneEvent:  // maybe remove in future (Scenes API Deprecated in 1.6 of library)
+            case Notification::NotificationType::Type_SceneEvent:
             {
                 _logger->info("Scene event ");
                 break;

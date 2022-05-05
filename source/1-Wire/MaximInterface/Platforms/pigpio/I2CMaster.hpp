@@ -9,51 +9,30 @@
 
 #pragma once
 
-#include <pigpiod_if2.h>            			// GPIO connector
-#include <MaximInterface/Links/I2CMaster.hpp>
-#include <MaximInterface/Utilities/Error.hpp>
-#include <MaximInterface/Utilities/system_error.hpp>
+#include <pigpiod_if2.h>            // GPIO connector
+#include <MaximInterfaceCore/I2CMaster.hpp>
 
-namespace MaximInterface {
+namespace MaximInterfaceCore {
 
-class piI2CMaster : public MaximInterface::I2CMaster {
+class piI2CMaster : public I2CMaster {
 public:
 
-  enum ErrorValue {
-    CommunicationError = 1,
-    OpenDeviceError,
-    AlreadyConnectedError,
-	WriteByteError,
-	WriteMultiByteError,
-	ReadByteError,
-	ToMuchDataError,
-	BadHandleError,
-	BadParamError,
-	WriteFailedError,
-	UnknownError
-  };
+  piI2CMaster(): _pigpio_handle(-1), _device_handle(-1) {}
 
-  piI2CMaster(): _pigpio_handle(-1) {}
+  virtual Result<void> start(uint_least8_t address);
 
-  virtual error_code start(uint_least8_t address);
-  virtual error_code stop();
-  virtual error_code writeByte(uint_least8_t data);
-  virtual error_code readByte(AckStatus status, uint_least8_t & data);  
-  MaximInterface_EXPORT static const error_category & errorCategory(int);
-  
-  
+  virtual Result<void> stop();
 
-protected:
-  virtual error_code readPacketImpl(uint_least8_t address, uint_least8_t * data, size_t dataLen, bool sendStop); 
-  virtual error_code writePacketImpl(uint_least8_t address, const uint_least8_t * data, size_t dataLen, bool sendStop);
+  virtual Result<void> writeByte(uint_least8_t data);
+
+  virtual Result<uint_least8_t> readByte(DoAck doAck);
+
+  virtual Result<void> writePacket(uint_least8_t address, span<const uint_least8_t> data, DoStop doStop);
+  virtual Result<void> readPacket(uint_least8_t address, span<uint_least8_t> data, DoStop doStop);
 
 private:
   int _pigpio_handle;
-  unsigned _device_handle;
+  int _device_handle;
 };
 
-inline error_code pi_make_error_code(piI2CMaster::ErrorValue e, int code = 0) {
-     return error_code(e, piI2CMaster::errorCategory(code));
-}
-
-} // namespace MaximInterface
+} // namespace MaximInterfaceCore

@@ -1,6 +1,6 @@
 #pragma once
 // Copyright: (c) Jaromir Veber 2019
-// Version: 25032019
+// Version: 10122019
 // License: MPL-2.0
 // *******************************************************************************
 //  This Source Code Form is subject to the terms of the Mozilla Public
@@ -15,7 +15,7 @@
 
 class i2cxx {
     public:
-        i2cxx(const std::string& path, unsigned int i2c_addr, std::shared_ptr<spdlog::logger>& logger);
+        i2cxx(const std::string& path, unsigned int i2c_addr, const std::shared_ptr<spdlog::logger>& logger);
         ~i2cxx() noexcept;
 
         void write_byte(unsigned bVal);
@@ -25,9 +25,9 @@ class i2cxx {
         void read(char *buf, size_t count);
 
     private:
-        int smbus_data(char rw, uint8_t cmd, int size, union i2c_smbus_data *data);
+        int smbus_data(char rw, uint8_t cmd, unsigned int size, union i2c_smbus_data *data);
 
-        std::shared_ptr<spdlog::logger>& _logger;
+        const std::shared_ptr<spdlog::logger> _logger;
         int _fd;
         unsigned _addr;
 };

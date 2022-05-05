@@ -1,5 +1,5 @@
-// Copyright: (c) Jaromir Veber 2018
-// Version: 05112018
+// Copyright: (c) Jaromir Veber 2018-2019
+// Version: 11092019
 // License: MPL-2.0
 // *******************************************************************************
 //  This Source Code Form is subject to the terms of the Mozilla Public

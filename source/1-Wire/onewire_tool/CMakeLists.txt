@@ -21,6 +21,7 @@ set(target mq_onewire_tool)
 set(sources ${target}.cpp)
 
 add_executable(${target} ${sources})
+target_include_directories(${target} PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../MaximInterface")
 target_link_libraries(${target} ${CONFIG++_LIBRARY} MaximInterface pthread)
 if (pigpio_FOUND)
     target_link_libraries(${target} ${pigpiod_if2_LIBRARY})
@@ -37,4 +38,4 @@ if (${IPO_SUPPORTED})
 	set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
-cotire(${target})
+#cotire(${target})

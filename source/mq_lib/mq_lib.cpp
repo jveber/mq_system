@@ -1,5 +1,5 @@
 // Copyright: (c) Jaromir Veber 2017-2019
-// Version: 18032019
+// Version: 09122019
 // License: MPL-2.0
 // *******************************************************************************
 //  This Source Code Form is subject to the terms of the Mozilla Public
@@ -19,6 +19,8 @@
 // external lib
 #include <libconfig.h++>  // configuration file parsing
 // spdlog (logging library)
+#include "spdlog/async.h"
+#include "spdlog/sinks/null_sink.h"
 #include "spdlog/sinks/dist_sink.h"
 #include "spdlog/sinks/syslog_sink.h"
 #include "spdlog/sinks/rotating_file_sink.h"
@@ -49,8 +51,11 @@ static void signal_handler(int sig) {
 }
 
 void sqlog_error_callback(void *pArg, int iErrCode, const char *zMsg) {
-    MQ_System::Daemon * vData = reinterpret_cast<MQ_System::Daemon *>(pArg);
-    vData->_logger->debug("Sqlite code: {} message: {}", iErrCode, zMsg);
+    auto logger = spdlog::get("emergecy logger");
+    if (logger == nullptr)
+        logger = spdlog::syslog_logger_st("emergecy logger");    // we need to use extra logger with it's own sink otherwise we'd risk deadlock because "normal" logger got mutex locked.
+    logger->debug("Sqlite code: {} message: {}", iErrCode, zMsg);
+    logger->flush();
 }
 
 #ifndef NDEBUG
@@ -65,25 +70,30 @@ extern "C" const char* __ubsan_default_options() {
 
 namespace MQ_System {
 const char* Daemon::kMqSystemConfigFile = "/etc/mq_system/system.conf";  // hard coded path (might be altered but...)
-const char* Daemon::kDefaultHost = "127.0.0.1";
+const char* Daemon::kDefaultHost = "127.0.0.1";  // IPv4 127.0.0.1 or IPv6 ::1 - for now we keep it on IPv4 thus IPv6 stack may not be enabled... 
 
-
-Daemon::Daemon(const char* daemon_name, const char* pid_name, bool no_daemon) : _log_mqtt(false), _pid_file(pid_name), _logger(std::make_shared<spdlog::logger>(daemon_name, std::make_shared<spdlog::sinks::dist_sink_mt>())) {
-    g_daemon = this;  // save the daemon ID for signal handler purposes
-    auto _log_sink = std::dynamic_pointer_cast<spdlog::sinks::dist_sink_mt>(_logger->sinks()[0]);
+Daemon::Daemon(const char* daemon_name, const char* pid_name, bool no_daemon)
+    : _logger(nullptr)
+    , _pid_file(pid_name)
+    , _log_mqtt(false)
+{
+    std::vector<spdlog::sink_ptr> sinks;
+    sinks.push_back(std::make_shared<spdlog::sinks::syslog_sink_mt>("mq_system", 0, LOG_USER, false)); // shall we use systemd sink for systemd?
+    sinks.push_back(std::make_shared<spdlog::sinks::null_sink_mt>());
+    sinks.push_back(std::make_shared<spdlog::sinks::null_sink_mt>());
+    _logger = std::make_shared<spdlog::logger>(daemon_name, begin(sinks), end(sinks));
     _logger->set_level(spdlog::level::trace);
-    auto basic_sink = std::make_shared<spdlog::sinks::syslog_sink_mt>("mq_system", 0, LOG_USER, false);  // shall we use systemd sink for systemd?
-    _log_sink->add_sink(basic_sink);
+    //auto _log_sink = std::dynamic_pointer_cast<spdlog::sinks::dist_sink_mt>(_logger->sinks()[0]);   
     daemonize(no_daemon);
+    g_daemon = this; // save the daemon ID for signal handler purposes
     signal(SIGTERM, signal_handler);
     signal(SIGHUP, signal_handler);
     load_mq_system_configuration();
 	_logger->flush();
     if (_log_file.size()) {
         try {
-            _log_sink->add_sink(std::make_shared<spdlog::sinks::rotating_file_sink_mt>(_log_file, 1024*1024, 5));
             _logger->flush();
-            _log_sink->remove_sink(basic_sink);
+            _logger->sinks()[0] = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(_log_file, 1024*1024, 5);
             _logger->trace("file_log initialized");
         } catch (const spdlog::spdlog_ex& spdex) {
             _logger->error(spdex.what());
@@ -93,9 +103,8 @@ Daemon::Daemon(const char* daemon_name, const char* pid_name, bool no_daemon) : 
         try {
             auto log_db_sink = conect_log_db();
             if (log_db_sink) {
-                _log_sink->add_sink(log_db_sink);
                 _logger->flush();
-                _log_sink->remove_sink(basic_sink);
+                _logger->sinks()[1] = log_db_sink;
                 _logger->trace("db_log initialized");
             } else {
                 _logger->error("failed to initialize db_log");
@@ -108,9 +117,8 @@ Daemon::Daemon(const char* daemon_name, const char* pid_name, bool no_daemon) : 
     _logger->flush();
     connect_mqtt();
     if (_log_mqtt) {
-        _log_sink->add_sink(std::make_shared<mosq_sink>(_mosquitto_object));  // this sink is not to presistent storage
         _logger->flush();
-        _log_sink->remove_sink(basic_sink);
+        _logger->sinks()[2] = std::make_shared<mosq_sink>(_mosquitto_object);
         _logger->trace("mqtt_log initialized");
     }
     _logger->info("Demon initialization finished");
@@ -122,14 +130,15 @@ std::shared_ptr<spdlog::sinks::sink> Daemon::conect_log_db() {
     sqlite3* _pLog = nullptr;
     if (!sqlite3_threadsafe()) {
         if (sqlite3_config(SQLITE_CONFIG_SERIALIZED)) {
-            _logger->warn("Unable to set serialized mode for SQLite! Tt is necessary to recompile it SQLITE_THREADSAFE!");
+            _logger->warn("Unable to set serialized mode for SQLite! It is necessary to recompile it SQLITE_THREADSAFE!");
             _logger->warn("We Continue using unsafe interface but beware of possible crash");
         }
     }
     sqlite3_config(SQLITE_CONFIG_LOG, sqlog_error_callback, this);
 
     sqlite3_initialize();
-    if (SQLITE_OK != sqlite3_open_v2(_log_db.c_str(), &_pLog, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL)) {
+    /// We try full mutex setup - since logging is not mutexed on log level  
+    if (SQLITE_OK != sqlite3_open_v2(_log_db.c_str(), &_pLog, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_PRIVATECACHE, NULL)) {
         _logger->warn("Sqlite3: Unable to open log database file! {}", _log_db);
         return nullptr;
     }
@@ -140,6 +149,9 @@ std::shared_ptr<spdlog::sinks::sink> Daemon::conect_log_db() {
         return nullptr;
     }
     return std::make_shared<db_sink>(_pLog);
+}
+
+void Daemon::CallBack(const std::string&, const std::string&) {
 }
 
 void Daemon::load_mq_system_configuration() {
@@ -262,12 +274,12 @@ Daemon::~Daemon() noexcept {
     if (!_logger.unique())
         _logger->warn("Logger terminate - Pointer not unique!");
     _logger->flush();
-    // const_cast<std::shared_ptr<spdlog::logger>(_logger).reset();  // now we release and cleanup all sinks 
     spdlog::shutdown();
     mosquitto_disconnect(_mosquitto_object);
     mosquitto_loop_stop(_mosquitto_object, true);
     mosquitto_destroy(_mosquitto_object);
     mosquitto_lib_cleanup();
+    sqlite3_shutdown();
 }
 
 void Daemon::Subscribe(const std::string& topic) noexcept {
@@ -287,12 +299,13 @@ void Daemon::Publish(const std::string& topic, const std::string& message) {
     if (mosresult != MOSQ_ERR_SUCCESS)
         _logger->warn("Publish error: {} ", mosresult);
 }
+
 void Daemon::SleepForever() {
     std::condition_variable cv;
     std::mutex m;
     std::unique_lock<std::mutex> lock(m);
     cv.wait(lock, [] {return false;});  // wait for something that would never happen
-    //std::this_thread::sleep_until(std::chrono::time_point<std::chrono::system_clock>::max());  // this one proved to be unsafe (overflow (undefined) - may not work)
+    //std::this_thread::sleep_until(std::chrono::time_point<std::chrono::system_clock>::max());  // this one proved to be unsafe (overflow (undefined) - may not work) - kepping it therre just to ensure noone use it again...
 }
 
 }  // namespace MQ_System

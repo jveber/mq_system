@@ -1,5 +1,5 @@
 // Copyright: (c) Jaromir Veber 2018-2019
-// Version: 20032019
+// Version: 13122019
 // License: MPL-2.0
 // *******************************************************************************
 //  This Source Code Form is subject to the terms of the Mozilla Public
@@ -83,9 +83,6 @@ void Exe_Service::execute_lua_script(const std::string& script_name, const std::
             break;
         case LUA_ERRMEM:
             _logger->warn("Memory allocation error while loading LUA script {} : {}", script_name, lua_tostring(lua_state, -1));
-            break;
-        case LUA_ERRGCMM:
-            _logger->warn("GC error while loading LUA script {} : {}", script_name, lua_tostring(lua_state, -1));
             break;
         default:
             _logger->warn("Unexpected error while loading LUA script {} : {}", script_name, lua_tostring(lua_state, -1));
@@ -212,22 +209,18 @@ long long string_value(const std::string& input_string, std::string& output_stri
     return value;
 }
 
-int mod (int a, int b)
-{
+inline int mod (int a, int b, bool & underflow) {
    int ret = a % b;
-   if(ret < 0)
-     ret+=b;
+   underflow = false;
+   if (ret < 0) {
+     ret += b;
+     underflow = true;
+   }
    return ret;
 }
 
-bool value_since_now(long long value, long long modulo, int16_t current, int_fast8_t& result) {
-    result = value - current;
-    if (result < 0) {
-        result = mod(result, modulo);
-        return true;  // underflow
-    }
-    result = mod(result, modulo);
-    return false;
+void value_since_now(int value_requested, unsigned int modulo, int16_t current, int_fast8_t& result, bool& underflow) {
+    result = mod(value_requested - current, modulo, underflow);
 }
 
 int_fast16_t parse_month(struct tm* tm, int_fast8_t req_monthday) {
@@ -253,6 +246,7 @@ int_fast16_t parse_month(struct tm* tm, int_fast8_t req_monthday) {
     return days_since_now;
 }
 
+// known bug is that in daylight saving time switch days it may not work well; because such days does not really have 24 hours. Thus we need to handle such days in a special way TODO.
 std::chrono::system_clock::time_point Exe_Service::parse_time_string(const std::string& time_string) {
     static const std::regex regex_now("NOW [0-9]+ (second|minute|hour|day|week|month)");
     static const std::regex regex_every("EVERY(( MONTHDAY -?[0-9]+)|( WEEKDAY [0-6]))?( DAYHOUR [0-9]+)?( HOURMINUTE [0-9]+)?( MINUTESECOND [0-9]+)?");
@@ -318,16 +312,20 @@ std::chrono::system_clock::time_point Exe_Service::parse_time_string(const std::
             else
                 req_minutesecond = 0;
         }
-        bool underflow = value_since_now(req_minutesecond, 60, tm.tm_sec, result_minute_second);
+        bool underflow = false;
+        value_since_now(req_minutesecond, 60, tm.tm_sec, result_minute_second, underflow);
+        _logger->debug("Current hourminute {} - underflow {}", tm.tm_min, underflow);
         if (req_hourminute == -1) {
             if ((req_dayhour == -1) && (req_weekday == -1) && !req_monthday)
                 req_hourminute = underflow ? tm.tm_min + 1 : tm.tm_min;
-            else 
+            else
                 req_hourminute = underflow ? 59 : 0;
         } else
             if (underflow)
                 --req_hourminute;
-        underflow = value_since_now(req_hourminute, 60, tm.tm_min, result_hour_minute);
+        value_since_now(req_hourminute, 60, tm.tm_min, result_hour_minute, underflow);
+        _logger->debug("Result hourminute {}, {}", result_hour_minute, underflow);
+        _logger->debug("Current dayhour {} - underflow {}", tm.tm_hour, underflow);
         if (req_dayhour == -1) {
             if ((req_weekday == -1) && !req_monthday)
                 req_dayhour = underflow ? tm.tm_hour + 1 : tm.tm_hour;
@@ -336,19 +334,27 @@ std::chrono::system_clock::time_point Exe_Service::parse_time_string(const std::
         } else
              if (underflow)
                 --req_dayhour;
-        underflow = value_since_now(req_dayhour, 24, tm.tm_hour, result_day_hour);
+        value_since_now(req_dayhour, 24, tm.tm_hour, result_day_hour, underflow);
+        _logger->debug("Result dayhour {}, {}", result_day_hour, underflow);
         if (req_monthday != 0) {
             if (underflow) req_monthday++;
             result_days = parse_month(&tm, req_monthday);
         } else if (req_weekday != -1) {
             if (underflow) req_weekday++;
             int8_t days = 0;
-            value_since_now(req_weekday, 7, tm.tm_wday, days);
+            value_since_now(req_weekday, 7, tm.tm_wday, days, underflow);
             result_days = days;
         } else {
+            _logger->debug("Nor monthday nor weekday underflow {}", underflow);
             //result_days = underflow ? 1 : 0;
         }
-        _logger->debug("waiting since now - {} days; {}:{}.{} ", result_days, result_day_hour, result_hour_minute, result_minute_second);
+        _logger->debug("waiting since now - days# {} time# {}:{}:{} ", result_days, result_day_hour, result_hour_minute, result_minute_second);
+        _logger->debug("Result wait day {} - {}:{}:{}",
+            result_days + ((tm.tm_hour + result_day_hour + ((tm.tm_min + result_hour_minute + ((tm.tm_sec + result_minute_second) / 60)) / 60)) / 24), 
+            (tm.tm_hour + result_day_hour + ((tm.tm_min + result_hour_minute + ((tm.tm_sec + result_minute_second) / 60)) / 60)) % 24, 
+            (tm.tm_min + result_hour_minute + ((tm.tm_sec + result_minute_second) / 60)) % 60, 
+            (tm.tm_sec + result_minute_second) % 60);
+
         const auto now = std::chrono::system_clock::now();
         const auto duration = now.time_since_epoch();
         const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
@@ -393,11 +399,12 @@ int Exe_Service::wait(lua_State * l, bool _or) {
             {
                 std::mutex mtx;
                 std::unique_lock<std::mutex> wait_lock(mtx);
+                _logger->trace("[LUA] wait - enter");
                 if (!_or) {  //wait and
                     const size_t wait_and_val = sensor_value_list.size() + time_list.size();
                     sync_obj.cond_var.wait(wait_lock, [&]() -> bool {
                         return _terminate_lua_threads || sync_obj.num >= wait_and_val;
-                    }); 
+                    });
                 } else  //wait or
                     sync_obj.cond_var.wait(wait_lock, [&]() -> bool {
                         return _terminate_lua_threads || sync_obj.num > 0;

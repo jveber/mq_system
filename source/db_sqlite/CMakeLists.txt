@@ -20,7 +20,7 @@ else()
     message(SEND_ERROR "Unsupported deamon manager")  # this should never happen
 endif()
 install(FILES ${CMAKE_SOURCE_DIR}/data/${target}.conf DESTINATION /etc/mq_system/ )
-cotire(${target})
+#cotire(${target})
 
 if (DAEMON_MANAGER EQUAL 1)
     add_custom_target(uninstall_${target}

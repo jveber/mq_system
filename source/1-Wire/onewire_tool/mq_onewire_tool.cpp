@@ -1,5 +1,5 @@
-// Copyright: (c) Jaromir Veber 2017-2018
-// Version: 24102018
+// Copyright: (c) Jaromir Veber 2017-2019
+// Version: 09122019
 // License: MPL-2.0
 // *******************************************************************************
 //  This Source Code Form is subject to the terms of the Mozilla Public
@@ -7,20 +7,18 @@
 //  file, You can obtain one at http ://mozilla.org/MPL/2.0/.
 // *******************************************************************************
 // This dirver contains controll interface onewire device - it lists all devices connected to 1-wire
-#include <stdexcept>                // exceptions
+#include <stdexcept>       // exceptions
 #include "../../config.h"
+#include "MaximInterface/Platforms/Sleep.hpp"
 #if defined pigpio_FOUND
     #include "MaximInterface/Platforms/pigpio/I2CMaster.hpp"
-    #include "MaximInterface/Platforms/pigpio/Sleep.hpp"
 #elif defined gpiocxx_FOUND
     #include "MaximInterface/Platforms/i2cxx/I2CMaster.hpp"
-    #include "MaximInterface/Platforms/i2cxx/Sleep.hpp"
 #endif
-#include "MaximInterface/Devices/DS2482_DS2484.hpp"
-#include "MaximInterface/Links/RomCommands.hpp"
-#include "MaximInterface/Utilities/HexConversions.hpp"
-
-#include "MaximInterface/Devices/DS18B20.hpp"
+#include "MaximInterfaceDevices/DS2482_DS2484.hpp"
+#include "MaximInterfaceDevices/DS18B20.hpp"
+#include "MaximInterfaceCore/RomCommands.hpp"
+#include "MaximInterfaceCore/HexString.hpp"
 #include "spdlog/sinks/stdout_sinks.h"
 
 
@@ -28,13 +26,14 @@
 // Well right now I support only one master (DS2482_100) over I2C on address 0x18.
 // but it is also possible to change the adress and also support other masters (DS2482_800, DS2484)
 // Also I support oly devices I have on 1-Wire and that is DS18B20
+//TODO - format entirely using spdlog?
 
-void PrintInformationByRomFamily(MaximInterface::RomId::value_type family, uint_least8_t romID[8]) {
-	printf("----------------------------------------------------\n"); 
-	printf("Device ID: %s\n", MaximInterface::byteArrayToHexString(romID, 8).c_str());
-	switch (family) {
+void PrintInformationByRomFamily(MaximInterfaceCore::RomId::const_span romID) {
+	printf("----------------------------------------------------\n");
+	printf("Device ID: %s\n", MaximInterfaceCore::toHexString(romID).c_str());
+	switch (romID.front()) { // familyCode
 		case 0x28:
-			printf("Detected family 0x28 probably device DS18B20 or compatible\n");			
+			printf("Detected family 0x28 probably device DS18B20 or compatible\n");
 			printf("Provides values: Temperature (read only)\n");
 			break;
 		case 0x10:
@@ -59,45 +58,39 @@ void PrintInformationByRomFamily(MaximInterface::RomId::value_type family, uint_
 int main() {
 	auto logger = spdlog::stdout_logger_mt("console");
 #if defined pigpio_FOUND
-    MaximInterface::piI2CMaster i2c;
-    MaximInterface::pigpio::Sleep Sleep;
+	MaximInterfaceCore::piI2CMaster i2c;
+	MaximInterface::Sleep Sleep;
 #elif defined gpiocxx_FOUND
-    MaximInterface::xxI2CMaster i2c("/dev/i2c-1", logger);
-    MaximInterface::pigpio::Sleep Sleep;
+	MaximInterfaceCore::xxI2CMaster i2c("/dev/i2c-1", logger);
+	MaximInterface::Sleep Sleep;
 #endif
 	i2c.start(0x18);
-	MaximInterface::DS2482_100 device(i2c, 0x18);
-	auto result = device.initialize();
-	if (!result.value()){
-		printf("Device init OK\n");
-	} else {
-		printf("Device error %s\n", result.message().c_str());
+	MaximInterfaceDevices::DS2482_100 device(i2c, 0x18);
+	const MaximInterfaceCore::Result<void> result = device.initialize();
+	if (!result) {
+		printf("Device init error %s\n", result.error().message().c_str());
 		return 1;
+	} else {
+		printf("Device init OK\n");
 	}
-	MaximInterface::SearchRomState searchState;
+	MaximInterfaceCore::SearchRomState searchState;
 	do {
-		auto result = MaximInterface::searchRom(device, searchState);
-		if (result) {
-			printf("Device error %s\n", result.message().c_str());
+		const MaximInterfaceCore::Result<void> result = MaximInterfaceCore::searchRom(device, searchState);
+		if (!result) {
+			printf("Device search error %s\n", result.error().message().c_str());
 			break;
-		}		
-		if (MaximInterface::valid(searchState.romId)) {
-			uint_least8_t romID[8];
-			for (size_t i = 0; i < 8; ++i)
-				romID[i] = searchState.romId[i];	
-			PrintInformationByRomFamily(MaximInterface::familyCode(searchState.romId), romID);
-			
-			MaximInterface::SelectMatchRom rom(searchState.romId);
-			
+		}
+		if (MaximInterfaceCore::valid(searchState.romId)) {
+			PrintInformationByRomFamily(searchState.romId);
+			MaximInterfaceCore::SelectMatchRom rom(searchState.romId);
 			printf("Init DS18B20\n");
-			MaximInterface::DS18B20 dev(Sleep, device, rom);
-			int temp = 0;
+			MaximInterfaceDevices::DS18B20 dev(Sleep, device, rom);
 			printf("Read temp DS18B20\n");
-			auto result = MaximInterface::readTemperature(dev, temp);
-			if (result)
-				printf("Read temp failed with error %s\n", result.message().c_str());
+			const auto result = MaximInterfaceDevices::readTemperature(dev);
+			if (!result)
+				printf("Read temp failed with error %s\n", result.error().message().c_str());
 			else
-				printf("DS18B20 result %f\n", temp/16.f);
+				printf("DS18B20 result %f\n", result.value()/16.0);
 		}
 	} while (searchState.lastDevice == false);
 	printf("----------------------------------------------------\n"); 

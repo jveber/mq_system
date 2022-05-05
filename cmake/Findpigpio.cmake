@@ -9,10 +9,10 @@ find_path(pigpio_INCLUDE_DIR
 	
 # Find the pigpio libraries.
 find_library(pigpio_LIBRARY 
-	NAMES libpigpio.so libpigpio.a
+	NAMES libpigpio
 	HINTS /usr/local/lib /usr/lib)
 find_library(pigpiod_if2_LIBRARY 
-	NAMES libpigpiod_if2.so libpigpiod_if2.a
+	NAMES libpigpiod_if2
 	HINTS /usr/local/lib /usr/lib)
     
 # Set the pigpio variables to plural form to make them accessible for 

@@ -1,5 +1,5 @@
 // Copyright: (c) Jaromir Veber 2019
-// Version: 01032019
+// Version: 10122019
 // License: MPL-2.0
 // *******************************************************************************
 //  This Source Code Form is subject to the terms of the Mozilla Public
@@ -16,7 +16,7 @@
 #include <poll.h>
 #include <linux/gpio.h>
 
-gpiocxx::gpiocxx(const std::string& path, std::shared_ptr<spdlog::logger>& logger): _logger(logger), _chip_fd(-1) {
+gpiocxx::gpiocxx(const std::string& path, const std::shared_ptr<spdlog::logger>& logger): _logger(logger), _chip_fd(-1) {
     auto fd = open(path.c_str(), O_RDWR | O_CLOEXEC);
     if (fd < 0) {
         _logger->error("GPIOcxx unable to open chip device {} : {}", path, strerror(errno));

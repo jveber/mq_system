@@ -1,5 +1,5 @@
-// Copyright: (c) Jaromir Veber 2017-2019
-// Version: 29032019
+// Copyright: (c) Jaromir Veber 2017-2021
+// Version: 21122020
 // License: MPL-2.0
 // *******************************************************************************
 //  This Source Code Form is subject to the terms of the Mozilla Public
@@ -15,7 +15,7 @@
 #elif defined gpiocxx_FOUND
     #include "gpio/gpioxx.hpp"
 #else
-    #error "no GPIO library present inf the system!"
+    #error "no GPIO library present in the system!"
 #endif
 
 #include <json-c/json_object.h>     // JSON format for communication
@@ -27,7 +27,7 @@
 #include <vector>                   // for storing sensor information
 #include <stdexcept>                // exceptions
 #include <thread>                   // sleep_for
-#include <memory>
+#include <memory>                   // smart pointers
 
 using namespace MQ_System;
 using namespace libconfig;
@@ -39,7 +39,7 @@ class DHT_Service : public Daemon {
     void main();
  private:
     struct MyConfig {
-        MyConfig(std::string n, int p, int i): 
+        MyConfig(std::string n, int p, int i):
             pin(p), interval(i), name(n) {}
         int pin;
         int interval;
@@ -71,8 +71,8 @@ DHT_Service::DHT_Service(): Daemon("mq_dht_daemon", "/var/run/mq_dht_daemon.pid"
 
 
 void DHT_Service::load_daemon_configuration() {
-    static const char* config_file = "/etc/mq_system/mq_dht_daemon.conf";	
-    Config cfg;	
+    static const char* config_file = "/etc/mq_system/mq_dht_daemon.conf";
+    Config cfg;
     try
     {
         cfg.readFile(config_file);
@@ -100,7 +100,7 @@ void DHT_Service::load_daemon_configuration() {
         if  (cfg.exists("log_level")) {
             int level;
             cfg.lookupValue("log_level", level);
-            _logger->set_level(static_cast<spdlog::level::level_enum>(level));		
+            _logger->set_level(static_cast<spdlog::level::level_enum>(level));
         }
     } catch(const SettingNotFoundException &nfex) {
         _logger->error("Required setting not found in system configuration file");
@@ -126,13 +126,12 @@ typedef struct my_data {
 void DHT_Service::read_sensors()
 {
     while (true) {
-        int interval = std::numeric_limits<decltype(interval)>::max();
 #ifdef pigpio_FOUND
         if (_pigpio_handle < 0)
             _pigpio_handle = pigpio_start(NULL, NULL);	// technically we also could support GPIO read from another RPI but well not yet needed TODO?
 
         if (_pigpio_handle < 0) {
-            _logger->error("Failed to connect to GPIO daemon (pigpiod)");
+            _logger->error("Failed to connect to GPIO daemon (pigpiod): Error - {}", pigpio_error(_pigpio_handle));
             throw std::runtime_error("");
         }
 #else
@@ -140,10 +139,13 @@ void DHT_Service::read_sensors()
             _chip.reset(new gpiocxx("/dev/gpiochip0", _logger));  // C++11 does not offer "std::make_unique<gpiocxx>("/dev/gpiochip0", _logger);" ...
         _logger->debug("Chip initialized");
 #endif
-
+        int biggest_interval = 1;   // this may be prepared in load_daemon_configuration
+        int interval = std::numeric_limits<decltype(interval)>::max();
         for (auto&& x : _pin_config) {
+            _logger->trace("read_sensors():Cycle {}", x.pin);
             auto now = std::chrono::steady_clock::now();
             std::chrono::duration<float> diff = now - x.last_refresh;
+            biggest_interval = biggest_interval < x.interval ? x.interval : biggest_interval;
             int next_wake = 0;
             if (diff.count() >= x.interval) {
                 read_sensor(x);
@@ -154,22 +156,23 @@ void DHT_Service::read_sensors()
             }
             if (next_wake < interval)
                 interval = next_wake;
+            _logger->debug("diff {} Interval {} Next wake {}", diff.count(), interval, next_wake);
         }
-        if (interval != 0) {
-#ifdef pigpio_FOUND
-            pigpio_stop(_pigpio_handle);  // consider whether we need to close connection every time?
-            _pigpio_handle = -1;
-#endif
+        _logger->debug("Interval {}, biggest interval {}", interval, biggest_interval);
+        if (interval > 0 && interval <= biggest_interval) { // interval may be negative! I that case we're not waiting at all
+            //Close connection to Pigpio? NO!!! Pigpio is not that stabe and is failing to recoonect it ater few thousand attempts; keep connection alive all the time.
+            _logger->trace("Waiting {} seconds", interval);
             std::this_thread::sleep_for(std::chrono::seconds(interval));
+            _logger->trace("Awake!");
         }
-        _logger->flush();
     }
+    _logger->trace("Exit read_sensors");
 }
 
 void DHT_Service::read_sensor(MyConfig &c)  noexcept {
     float humidity_[3], temperature_[3];
     bool got_measure[3] = {false, false, false};
-    //_logger->debug("Read sensor {}", c.pin);
+    _logger->debug("Read sensor {}", c.pin);
     // prepare GPIO
 #ifdef pigpio_FOUND
     set_pull_up_down(_pigpio_handle, c.pin, PI_PUD_OFF);
@@ -179,7 +182,7 @@ void DHT_Service::read_sensor(MyConfig &c)  noexcept {
 #endif
     // we actually do 3 measures and calculate the average
     for (int j = 0; j < 3; j++) {
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < 40; i++) {
             if (0 != read_sensor_data(c.pin, humidity_[j], temperature_[j])) {
                 _logger->trace("Error reading sensor {}", c.pin);
                 std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -187,13 +190,13 @@ void DHT_Service::read_sensor(MyConfig &c)  noexcept {
             }
 
             if (humidity_[j] > 100.f ||  humidity_[j] < 0.f) {
-                _logger->trace("Humidity out of bounds: {}", humidity_[j]);
+                _logger->info("Humidity out of bounds: {}", humidity_[j]);
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 continue;
             }
 
             if (temperature_[j] > 55.f || temperature_[j] < -30.f) {
-                _logger->trace("Temperature out of bounds: {}", temperature_[j]);
+                _logger->info("Temperature out of bounds: {}", temperature_[j]);
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 continue;
             }
@@ -250,6 +253,7 @@ void DHT_Service::read_sensor(MyConfig &c)  noexcept {
     std::string json_string = json_object_to_json_string(j);
     Publish(c.name, json_string);  // send JSON message with our measures to MQTT broker
     json_object_put(j); //free the object - is this enough? TODO check memory consumption after few days running (basically it seems to be safe).
+    _logger->trace("Exit read_sensor");
 }
 
 
@@ -257,21 +261,23 @@ void DHT_Service::read_sensor(MyConfig &c)  noexcept {
 #ifdef pigpio_FOUND
 
 static void callback_rise_func(int pi __attribute__((unused)), unsigned user_gpio __attribute__((unused)), unsigned level, uint32_t tick, void * user) noexcept {
-    MyData *T = (MyData*) user;
-    uint32_t time_dif = tick - T->time;
-    if (time_dif > std::numeric_limits<int32_t>::max()) //FIX for clock wrap-around (once per hour & 12 minutes) - does it "really" work?
-          time_dif = tick + (std::numeric_limits<uint32_t>::max() - T->time);
-    T->time = tick;
+    MyData *data = (MyData*) user;
+    uint32_t time_dif = tick - data->time;
+    if (time_dif > std::numeric_limits<decltype(time_dif)>::max()) //FIX for clock wrap-around (once per hour & 12 minutes) - does it "really" work?
+        time_dif = tick + (std::numeric_limits<decltype(time_dif)>::max() - data->time);
+    data->time = tick;
     if (level == 0 && time_dif > 15) {
-        ++T->bit_counter;
-        T->bits <<= 1;
+        ++data->bit_counter;
+        data->bits <<= 1;
         if (time_dif  > 60)
-            T->bits |= 1;
+            data->bits |= 1;
     }
 }
 
+MyData T {};
+
 int DHT_Service::read_sensor_data(int id, float& humidity, float& temperature)  noexcept {
-    MyData T;
+    // T moved to global context, because making it in function context might cause some stack memory access problems as we proveide it to interruption handler that may trigger itself in unpredictable time, even after we exit the function.
     T.time = get_current_tick(_pigpio_handle);
     T.bit_counter = 0;
     T.bits = 0;

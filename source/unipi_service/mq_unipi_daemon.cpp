@@ -1,5 +1,5 @@
 // Copyright: (c) Jaromir Veber 2017-2019
-// Version: 25032019
+// Version: 12122019
 // License: MPL-2.0
 // *******************************************************************************
 //  This Source Code Form is subject to the terms of the Mozilla Public
@@ -34,6 +34,9 @@
 //      AI1 ... AI2      - double value (-10 ... 10)   - value of analog input in volts 
 //
 // EEPROM even throug reading and writing is fully supported by API; it is not yet accepted/reported by module (maybe in future versions)
+
+
+// TODO - current version not finished (may not ork well)!
 
 #include "mq_lib.h"
 
@@ -85,7 +88,7 @@ class UniPi_Service : public Daemon {
     std::chrono::system_clock::time_point _last_ai_report_time;
 };
 
-UniPi_Service::UniPi_Service(): Daemon("mq_unipi_daemon", "/var/run/mq_unipi_daemon.pid", true), _eeprom(nullptr), _relays(nullptr), _analog_input(nullptr), 
+UniPi_Service::UniPi_Service(): Daemon("mq_unipi_daemon", "/var/run/mq_unipi_daemon.pid"), _eeprom(nullptr), _relays(nullptr), _analog_input(nullptr), 
             _read_thread_run(true), //_digital_input(nullptr), _analog_output(nullptr),
              _tokener(json_tokener_new()), _analog_input_report_time(120) {}
 
@@ -116,7 +119,7 @@ void UniPi_Service::load_daemon_configuration() {
 
 class EEPROM {
 public:
-    EEPROM (const std::string& device, std::shared_ptr<spdlog::logger>& log): _logger(log) {
+    EEPROM (const std::string& device, const std::shared_ptr<spdlog::logger>& log): _logger(log) {
         _eeprom_handle = new i2cxx(device, EEPROM_ADDRESS, _logger);
         _logger->trace("24C02 open ... OK");
     }
@@ -149,7 +152,7 @@ public:
         p_coef[2] = read_byte(address + 1);
         p_coef[1] = read_byte(address + 2);
         p_coef[0] = read_byte(address + 3);
-        if (6.0 < coef || coef < 4.8) { // well this resolve Unipi 1.0 & possible error or EEPROM rewrite
+        if (6.f < coef || coef < 4.8f) { // well this resolve Unipi 1.0 & possible error or EEPROM rewrite
             _logger->info("Coeficient was not in range so using 5.56 - Analog input may not be precise");
             coef = 5.564920867;
         }
@@ -158,12 +161,12 @@ public:
 private:
     static constexpr unsigned EEPROM_ADDRESS = 0x50;
     i2cxx* _eeprom_handle;
-    std::shared_ptr<spdlog::logger> _logger;
+    const std::shared_ptr<spdlog::logger> _logger;
 };
 
 class MCP23008 {
 public:
-    MCP23008(const std::string& device, std::shared_ptr<spdlog::logger>& log):  _logger(log) {
+    MCP23008(const std::string& device, const std::shared_ptr<spdlog::logger>& log):  _logger(log) {
         _mcp_handle = new i2cxx(device, MCP23008_ADDRESS, log);
         _logger->trace("MCP23008 open ... OK");
         _mcp_handle->write_byte_data(MCP23008_IODIR, 0x00);  // since there are on all I/O pins relays we need them all to be output.
@@ -179,6 +182,7 @@ public:
     }
 
     void set_relay_value(size_t pos, bool val) {
+        _logger->trace("Set relay {} to {}", pos, val);
 		if (pos > 7) {
             _logger->error("MCP23008 set_relay_value error - index out of bounds");
             throw std::runtime_error("");
@@ -199,14 +203,14 @@ private:
     static constexpr unsigned MCP23008_OLAT = 0x0A;      // latch output status
     i2cxx* _mcp_handle;
     std::bitset<8> _state;
-    std::shared_ptr<spdlog::logger> _logger;
+    const std::shared_ptr<spdlog::logger> _logger;
 };
 
 
 class MCP3422 {
 public:
-    MCP3422(const std::string& device, std::shared_ptr<spdlog::logger> log, float coef1, float coef2):  _logger(log), coef{coef1, coef2} {
-        _mcp_handle = new i2cxx(device, MCP3422_ADDRESS, log);
+    MCP3422(const std::string& device, const std::shared_ptr<spdlog::logger>& log, float coef1, float coef2):  _logger(log), coef{coef1, coef2} {
+        _mcp_handle.reset(new i2cxx(device, MCP3422_ADDRESS, log));
         _logger->trace("MCP3422 open ... OK");
     }
 
@@ -254,11 +258,12 @@ private:
     }
 
     static constexpr unsigned MCP3422_ADDRESS = 0x68;
-    i2cxx* _mcp_handle;
-    float coef[2];
+    std::unique_ptr<i2cxx> _mcp_handle;
     std::bitset<8> _config;
-    std::shared_ptr<spdlog::logger> _logger;
+    const std::shared_ptr<spdlog::logger> _logger;
+    float coef[2];
 };
+
 #if 0
 class DigitalInputs {
     public:
@@ -303,7 +308,7 @@ class DigitalInputs {
 
     private:
         gpiocxx* _gpio;
-        std::shared_ptr<spdlog::logger> _logger;
+        const std::shared_ptr<spdlog::logger> _logger;
         struct mosquitto * _mosquitto_object;
         const std::string& _sensor_name;
         static const uint8_t di_map[14];	
@@ -317,7 +322,7 @@ const uint8_t DigitalInputs::di_map[14] = { 4, 17, 27, 23, 22, 24, 11, 7, 8, 9, 
 /*
 class AnalogOutput {
     public:
-        AnalogOutput(int pigpio_handle, std::shared_ptr<spdlog::logger> log, uint8_t version_minor) : _pigpio_handle(pigpio_handle), _logger(log), _version_minor(version_minor) {
+        AnalogOutput(int pigpio_handle, const std::shared_ptr<spdlog::logger> log, uint8_t version_minor) : _pigpio_handle(pigpio_handle), _logger(log), _version_minor(version_minor) {
             set_PWM_frequency(_pigpio_handle, _pin, 400);
             set_PWM_range(_pigpio_handle, _pin, 1000);
             set(0.0);
@@ -334,7 +339,7 @@ class AnalogOutput {
     private:
         static constexpr unsigned _pin = 18;
         int _pigpio_handle;
-        std::shared_ptr<spdlog::logger> _logger;
+        const std::shared_ptr<spdlog::logger> _logger;
         uint8_t _version_minor;
 };
 */
@@ -375,7 +380,7 @@ void UniPi_Service::read_thread_loop() {
             if (sleep_time >= 1.0) {
                 double intpart = 0;
                 double rest = std::modf(sleep_time, &intpart);
-                /*
+                /* TODO
                 auto result = _digital_input->wait_events(static_cast<uint32_t>(intpart) > 10 ? 10 : static_cast<uint32_t>(intpart)); // we wait no longer than 10 secs
                 if (result.size()) {
                     for (const auto& x : result) {
@@ -440,10 +445,10 @@ void UniPi_Service::CallBack(const std::string& topic, const std::string& messag
                  _analog_output->set(value);
             */
         } else {
-            if (key.length() == 6 && key.substr(0,4) == "relay") {
+            if (key.length() == 6 && key.substr(0,5) == "relay") {
                     auto relay_num = key[5] - '0';
                     if (relay_num < 1 || relay_num > 8)
-                        _logger->warn("unexpected value name {} on sensor {}", key, topic.substr(4));
+                        _logger->warn("Relay ID out of bounds {} on sensor {}", key, topic.substr(4));
                     else {
                         if (object_type != json_type_boolean)
                             _logger->warn("{} value on sensor {} not of expected type boolean", key, topic.substr(4));
@@ -451,7 +456,7 @@ void UniPi_Service::CallBack(const std::string& topic, const std::string& messag
                             _relays->set_relay_value(--relay_num, json_object_get_boolean(object));
                     }
             } else
-                _logger->warn("unexpected value name {} on sensor {}", key, topic.substr(4));
+                _logger->warn("Unexpected value name {} on sensor {}", key, topic.substr(4));
         }
     }
 }
@@ -471,10 +476,9 @@ UniPi_Service::~UniPi_Service() noexcept {
 int main() 
 {
     try {
-        UniPi_Service* d = new UniPi_Service();
-        d->main();
-        delete d;
+        UniPi_Service d;
+        d.main();
     } catch (const std::runtime_error& error) {
-        return -2;
+        return -1;
     }
 }

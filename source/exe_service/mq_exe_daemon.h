@@ -6,6 +6,7 @@
 //  License, v. 2.0. If a copy of the MPL was not distributed with this
 //  file, You can obtain one at http ://mozilla.org/MPL/2.0/.
 // *******************************************************************************
+#pragma once
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
@@ -20,10 +21,8 @@
 #include <vector>
 #include <mutex>
 #include <atomic>
-
+#include <future>       // future
 #include "mq_lib.h"  // MQ_System utility library
-
-using namespace libconfig;
 
 class Exe_Service : public MQ_System::Daemon {
 public:

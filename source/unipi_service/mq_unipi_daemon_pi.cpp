@@ -38,7 +38,7 @@
 #include "mq_lib.h"
 
 #include <limits.h>                 // techically could be switched to <limits> but well
-#include <pigpiod_if2.h>            // GPIO connector
+#include <pigpiod_if2.h>            // GPIO & I2C library (daemon)
 #include <json-c/json_object.h>     // JSON format for communication
 #include <json-c/json_tokener.h>    // JSON format translation (reading)
 #include <json-c/linkhash.h>        // access JSON-C dictionary object (for cycle json_object_object_foreach)
@@ -53,7 +53,6 @@
 #include <bitset>                   // bit operations
 #include <cmath>                    // for NAN
 #include <array>                    // for std::array
-#include <iterator>                 // for std::distance
 
 
 using namespace MQ_System;
@@ -113,6 +112,11 @@ void UniPi_Service::load_daemon_configuration() {
     try {
         cfg.getRoot().lookupValue("name", _sensor_name);
         cfg.getRoot().lookupValue("AI", _analog_input_report_time);
+        if  (cfg.exists("log_level")) {
+            int level;
+            cfg.lookupValue("log_level", level);
+            _logger->set_level(static_cast<spdlog::level::level_enum>(level));		
+        }
     } catch(const SettingNotFoundException &nfex) {
         _logger->error("Required setting not found in system configuration file");
         throw std::runtime_error("");
@@ -224,6 +228,7 @@ public:
     }
 
     void set_relay_value(size_t pos, bool val) {
+        _logger->trace("Set relay {} to {}", pos + 1, val);
         if (pos > 7) {
             _logger->error("MCP23008 set_relay_value error - index out of bounds {}", pos);
             throw std::runtime_error("");
@@ -285,7 +290,7 @@ public:
         }
         uint8_t sign_byte = (data[0] & 0x03) ? 0xFF : 0x00;  // sign bit
         int32_t digital_output_code = (static_cast<int32_t>(sign_byte) << 24) | (static_cast<int32_t>(data[0]) << 16) | (static_cast<int32_t>(data[1]) << 8) | data[2];	
-        double result = digital_output_code * (2.048 / 0b11111111111111111) * (channel ? coef[1] : coef[0]);
+        double result = digital_output_code * (2.048 / 0b11111111111111111) * static_cast<double>(channel ? coef[1] : coef[0]);
         return result;
     }
 
@@ -335,16 +340,18 @@ class DigitalInputs {
         void event(unsigned user_gpio, unsigned level, uint32_t tick) noexcept {
             if (level == 2)
                 return;
-            auto pin_map_iterator = std::find(digital_input_pin_map.begin(), digital_input_pin_map.end(), user_gpio);
-            if (pin_map_iterator == digital_input_pin_map.end()) {
+            auto pin_map_iterator = std::find(digital_input_pin_map.cbegin(), digital_input_pin_map.cend(), user_gpio);
+            if (pin_map_iterator == digital_input_pin_map.cend()) {
                 _parent->_logger->warn("DigitalInputs::event - ignoring signal on unregistered pin!? {}", user_gpio);  // this should not happen since we register only pins in map but..
                 return;
             }
-            auto value_name = std::string("I") + std::to_string((pin_map_iterator - digital_input_pin_map.begin()) + 1); //it's I01 .. I14
+            
+            auto value_name = std::string("I") + std::to_string((pin_map_iterator - digital_input_pin_map.cbegin()) + 1); //it's I01 .. I14
             struct json_object* j_object = json_object_new_object();
             json_object_object_add(j_object, value_name.c_str(), json_object_new_boolean(level));
             const char* json_string = json_object_to_json_string_ext(j_object, JSON_C_TO_STRING_PLAIN);
             _parent->Publish(std::string("status/") + _sensor_name, std::string(json_string));
+            _parent->_logger->debug("DigitalInputs::Event {} {} {} - {}:{}", user_gpio, level, tick, _sensor_name, json_string);
             json_object_put(j_object);
         }
 
@@ -468,10 +475,10 @@ void UniPi_Service::CallBack(const std::string& topic , const std::string& messa
             else
                 _analog_output->set(value);
         } else {
-            if (key.length() == 6 && key.substr(0,4) == "relay") {
+            if (key.length() == 6 && key.substr(0,5) == "relay") {
                 auto relay_num = key[5] - '0';
                     if (relay_num < 1 || relay_num > 8)
-                        _logger->warn("unexpected value name {} on sensor {}", key, topic.substr(4));
+                        _logger->warn("Unexpected relay id {} on sensor {}", key, topic.substr(4));
                     else {
                         if (object_type != json_type_boolean)
                             _logger->warn("{} value on sensor {} not of expected type boolean", key, topic.substr(4));
@@ -479,7 +486,7 @@ void UniPi_Service::CallBack(const std::string& topic , const std::string& messa
                             _relays->set_relay_value(--relay_num, json_object_get_boolean(object));
                     }
             } else
-                _logger->warn("unexpected value name {} on sensor {}", key, topic.substr(4));
+                _logger->warn("Unexpected value name {} on sensor {}", key, topic.substr(4));
         }
         // EEPROM - does anyone need EEPROM theese days, on RPi? There is always storage (microSD; and also may be external flash) so I do not see any reason to use this EEPROM except of it's current use 
         // (read only for UniPi verison an coeficients)

@@ -1,6 +1,6 @@
 #pragma once
 // Copyright: (c) Jaromir Veber 2019
-// Version: 01032019
+// Version: 10122019
 // License: MPL-2.0
 // *******************************************************************************
 //  This Source Code Form is subject to the terms of the Mozilla Public
@@ -23,7 +23,7 @@ class gpiocxx {
             BOTH_EDGES
         };
 
-        gpiocxx(const std::string& path, std::shared_ptr<spdlog::logger>& logger);
+        gpiocxx(const std::string& path, const std::shared_ptr<spdlog::logger>& logger);
         ~gpiocxx();
         
         bool is_output(uint32_t gpio);
@@ -41,7 +41,7 @@ class gpiocxx {
         inline void check_offset(uint32_t gpio);
         void request(uint32_t gpio, bool input);
 
-        std::shared_ptr<spdlog::logger> _logger;
+        const std::shared_ptr<spdlog::logger> _logger;
         int _chip_fd;
 
         struct line {

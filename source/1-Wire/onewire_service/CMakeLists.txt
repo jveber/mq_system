@@ -13,6 +13,8 @@ else ()
     message(SNED_ERROR "Neither pigpio nor i2cxx found ... dunno what to link to onewire daemon")  # this should never happen
 endif()
 
+target_include_directories(${target} PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../MaximInterface")
+
 set_property(TARGET ${target} PROPERTY CXX_STANDARD 11)
 set_property(TARGET ${target} PROPERTY CMAKE_CXX_STANDARD_REQUIRED yes)
 
@@ -30,7 +32,7 @@ else()
 endif()
 install(FILES ${CMAKE_SOURCE_DIR}/data/${target}.conf DESTINATION /etc/mq_system/ )
 
-cotire(${target})
+#cotire(${target})
 
 if (DAEMON_MANAGER EQUAL 1)
     add_custom_target(uninstall_${target}

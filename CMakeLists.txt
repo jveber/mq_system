@@ -23,7 +23,7 @@ include(GenerateExportHeader)
 enable_language(C CXX)
 include(CheckIPOSupported)
 check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_INFO)
-
+set(CMAKE_UNITY_BUILD  YES)
 message(STATUS "Using IPO ${IPO_SUPPORTED} info ${IPO_INFO}")
 
 include(CMakeDependentOption)
@@ -35,13 +35,13 @@ include(WriteCompilerDetectionHeader OPTIONAL RESULT_VARIABLE WriterCompilerDete
 
 # Include custom cmake modules
 include(cmake/GetGitRevisionDescription.cmake)
-include(cmake/cotire.cmake)
+#include(cmake/cotire.cmake)
 include(CMakeDependentOption)
 
-set (COTIRE_MINIMUM_NUMBER_OF_TARGET_SOURCES 2)
-# 
+set (COTIRE_MINIMUM_NUMBER_OF_TARGET_SOURCES 1000)
+#
 # Project description and (meta) information
-# 
+#
 
 # Get git revision
 get_git_head_revision(GIT_REFSPEC GIT_SHA1)
@@ -82,14 +82,15 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR})
 # Create version file
 file(WRITE "${PROJECT_BINARY_DIR}/VERSION" "${META_NAME_VERSION}")
 
-# Compiler settings and options 
+# Compiler settings and options
 include(cmake/CompileOptions.cmake)
-set(CMAKE_C_FLAGS "-fpie -Wl,-pie -Wall -Wextra -pipe -fno-common  -fno-plt ")
-set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS}")
+set(CMAKE_C_FLAGS "-march=native -mfpu=neon-vfpv4 -mfloat-abi=hard -mtune=native -fpie -Wl,-pie -Wall -Wextra -pipe -fno-common  -fno-plt -fno-omit-frame-pointer -static-libstdc++ -lrt")
+set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS}" )
 set(C_RELEASE_FLAGS "-DNDEBUG -O2  -Wno-unused -fasynchronous-unwind-tables -fno-semantic-interposition -fstack-clash-protection -fstack-protector-strong -fipa-pta -fdevirtualize-at-ltrans -ftree-vectorize -Wno-reorder -fgraphite-identity -floop-nest-optimize -ftree-loop-distribution -fstrict-aliasing")
 # -fsanitize=memory -fsanitize-memory-track-origins -fsanitize=thread -fsanitize=undefined -fsanitize=float-cast-overflow -fsanitize=pointer-compare -fsanitize=float-divide-by-zero -fsanitize=pointer-subtract -D_GLIBCXX_SANITIZE_VECTOR -fsanitize-address-use-after-scope -U_FORTIFY_SOURCE -Wdouble-promotion -Wno-psabi -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Wnull-dereference -Werror=format-security -Werror=implicit-function-declaration -U_FORTIFY_SOURCE -fsanitize=address
 # -fsanitize=thread -fsanitize=memory -fsanitize-memory-track-origins
 string(CONCAT C_DEBUG_FLAGS "-O0 -g3 -fno-omit-frame-pointer -Wpedantic -fexceptions -fsanitize-recover=all -Wl,-z,defs -Wl,-z,now -Wl,-z,relro -Wformat=2 -fno-strict-aliasing -Wstrict-aliasing=2"
+#" -fsanitize=thread"
 " -fsanitize=address"
 " -fsanitize-address-use-after-scope"
 " -fsanitize=bool"
@@ -115,7 +116,7 @@ string(CONCAT C_DEBUG_FLAGS "-O0 -g3 -fno-omit-frame-pointer -Wpedantic -fexcept
 " -fsanitize=unreachable"
 " -fsanitize=vla-bound"
 " -fsanitize=vptr"
-" -D_GLIBCXX_SANITIZE_VECTOR -Wdouble-promotion -Wno-psabi -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Wnull-dereference -Werror=format-security -Werror=implicit-function-declaration")
+" -D_GLIBCXX_SANITIZE_VECTOR -Wdouble-promotion -Wno-psabi -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Wnull-dereference -Werror=format-security")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} ${C_DEBUG_FLAGS}")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} ${C_RELEASE_FLAGS}")
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS} -Wjump-misses-init ${C_DEBUG_FLAGS}")
@@ -124,9 +125,9 @@ set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS} ${C_RELEASE_FLAGS}")
 if (CMAKE_BUILD_TYPE STREQUAL Debug)
     set(IPO_SUPPORTED OFF)  # only for DEBUG
 endif()
-# 
+#
 # Deployment/installation setup
-# 
+#
 
 # Get project name
 set(project ${META_PROJECT_NAME})
@@ -213,7 +214,8 @@ find_package (Config++)
 find_package (pigpio)
 find_package (udev)
 
-set(LUA_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/lua-5.3.4/src")
+set(LUA_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/lua-5.4.4/src")
+
 if (NOT CONFIG++_FOUND)
 	message(SEND_ERROR "libconfig/libconfig++ not found - it is necessary requirement to read config files by mq_system")
 endif()

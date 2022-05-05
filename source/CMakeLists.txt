@@ -1,5 +1,5 @@
 
-add_custom_target(uninstall 
+add_custom_target(uninstall
 	COMMAND rm -f /etc/mq_system/system.conf
 	COMMAND rm -rf /var/log/mq_system
 	COMMAND rm -f /var/db/mq_system.db
@@ -7,17 +7,17 @@ add_custom_target(uninstall
 	COMMAND rm -f /var/db/mq_log.db
 	COMMAND rm -rf /etc/mq_system
 )
-# 
+#
 # Configuration for all sub-projects
-# 
+#
 configure_file(config.in ${CMAKE_CURRENT_SOURCE_DIR}/config.h)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/mq_lib)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
-# 
+#
 # Sub-projects
-# 
+#
 
 # Libraries
 set(IDE_FOLDER "")
@@ -77,7 +77,7 @@ find_library(OpenZWave NAMES libopenzwave.a HINTS ${CMAKE_SOURCE_DIR}/open-zwave
 
 CMAKE_DEPENDENT_OPTION(MQ_ZWAVE_MODULE "Build Z-Wave module" ON "UDEV_FOUND; OpenZWave" OFF)
 if (MQ_ZWAVE_MODULE)
-	if (NOT UDEV_FOUND) 
+	if (NOT UDEV_FOUND)
 		message(STATUS "udev library not found cant build zwave module")
 	else ()
 		if (OpenZWave)

@@ -1,5 +1,5 @@
 // Copyright: (c) Jaromir Veber 2017-2019
-// Version: 08072019
+// Version: 09122019
 // License: MPL-2.0
 // *******************************************************************************
 //  This Source Code Form is subject to the terms of the Mozilla Public
@@ -19,17 +19,17 @@
 #include <thread>                   // sleep_for
 #include <limits>                   // for limit
 #include <algorithm>                // to write some common algos faster
+
+#include "Platforms/Sleep.hpp"
 #if defined pigpio_FOUND
-    #include "MaximInterface/Platforms/pigpio/I2CMaster.hpp"
-    #include "MaximInterface/Platforms/pigpio/Sleep.hpp"
+    #include "Platforms/pigpio/I2CMaster.hpp"
 #elif defined gpiocxx_FOUND
-    #include "MaximInterface/Platforms/i2cxx/I2CMaster.hpp"
-    #include "MaximInterface/Platforms/i2cxx/Sleep.hpp"
+    #include "Platforms/i2cxx/I2CMaster.hpp"
 #endif
-#include "MaximInterface/Devices/DS2482_DS2484.hpp"
-#include "MaximInterface/Devices/DS18B20.hpp"
-#include "MaximInterface/Links/RomCommands.hpp"
-#include "MaximInterface/Utilities/HexConversions.hpp"
+#include "MaximInterfaceDevices/DS2482_DS2484.hpp"
+#include "MaximInterfaceDevices/DS18B20.hpp"
+#include "MaximInterfaceCore/RomCommands.hpp"
+#include "MaximInterfaceCore/HexString.hpp"
 
 using namespace MQ_System;
 using namespace libconfig;
@@ -41,18 +41,20 @@ class OneWire_Service : public Daemon {
     void main();
     //virtual void CallBack(const std::string& topic, const std::string& message) override;
  private:
-    void ProcessRomDevice(MaximInterface::SearchRomState& searchState);
+    void ProcessRomDevice(MaximInterfaceCore::SearchRomState& searchState);
     void load_daemon_configuration();
 
     class OWDevice {
      public:
         OWDevice(const std::string& name, const std::string& id, int interval) : _found(false), _name(name), _interval(interval) {
-             auto rom_id = MaximInterface::hexStringToByteArray(id);
-             std::move(rom_id.begin(), rom_id.begin() + 8, _rom_id.begin());
+             auto rom_id = MaximInterfaceCore::fromHexString(MaximInterfaceCore::span<const char>(id.c_str(), id.size()));
+             if (rom_id) // rom_id is optional (it may or may not contain vector) this way we check if it has value
+                _rom_id = std::move(*rom_id);
         }
         decltype(std::chrono::steady_clock::now()) _last_refresh;
         bool _found;
-        MaximInterface::RomId _rom_id;
+        // MaximInterfaceCore::RomId _rom_id;
+        std::vector<uint_least8_t> _rom_id;
         std::string _name;
         int _interval;
     };
@@ -63,11 +65,11 @@ class OneWire_Service : public Daemon {
     std::string _sensor_name;
     struct json_tokener* const _tokener;
 #if defined pigpio_FOUND
-    std::unique_ptr<MaximInterface::piI2CMaster> _i2c;
+    std::unique_ptr<MaximInterfaceCore::piI2CMaster> _i2c;
 #elif defined gpiocxx_FOUND
-    std::unique_ptr<MaximInterface::xxI2CMaster> _i2c;
+    std::unique_ptr<MaximInterfaceCore::xxI2CMaster> _i2c;
 #endif
-    std::unique_ptr<MaximInterface::DS2482_DS2484> _master;
+    std::unique_ptr<MaximInterfaceDevices::DS2482_DS2484> _master;
     std::unique_ptr<MaximInterface::Sleep> _sleep;
 };
 
@@ -113,6 +115,11 @@ void OneWire_Service::load_daemon_configuration() {
                 sensor_interval = sensor.lookup("interval");
             _devices.emplace_back(sensor_name, device_id, sensor_interval);
         }
+        if  (cfg.exists("log_level")) {
+            int level;
+            cfg.lookupValue("log_level", level);
+            _logger->set_level(static_cast<spdlog::level::level_enum>(level));		
+        }
     } catch(const SettingNotFoundException &nfex) {
         _logger->error("Setting \"sensors\" not found in configuration file - running daemon without registered sensors is wast of your resources terminating");
         throw std::runtime_error("");
@@ -121,19 +128,19 @@ void OneWire_Service::load_daemon_configuration() {
     }
 }
 
-void OneWire_Service::ProcessRomDevice(MaximInterface::SearchRomState& searchState) {
+void OneWire_Service::ProcessRomDevice(MaximInterfaceCore::SearchRomState& searchState) {
     auto iterator = std::find_if(_devices.begin(), _devices.end(), [searchState](const OWDevice& dev){ return std::equal(&searchState.romId[0], &searchState.romId[7], dev._rom_id.cbegin());});
     if (iterator == _devices.end()) {
-        _logger->info("Found additional device that is not rquested by config file - such device can't be reported - ID {}", MaximInterface::byteArrayToHexString(&searchState.romId[0], 8) );
+        _logger->info("Found additional device that is not rquested by config file - such device can't be reported - ID {}", MaximInterfaceCore::toHexString(searchState.romId));
         return;
     }
-    auto family = MaximInterface::familyCode(searchState.romId);
-    switch (family) {
+    auto family_code = searchState.romId.front();
+    switch (family_code) {
         case 0x28:
             _logger->trace("Detected family 0x28 probably device DS18B20 or compatible");
             break;
         default:
-            _logger->warn("Founf unsupported device type: {}; device will be removed from report list!", family);
+            _logger->warn("Founf unsupported device type: {}; device will be removed from report list!", family_code);
             _devices.erase(iterator);
             break;
     }
@@ -142,21 +149,20 @@ void OneWire_Service::ProcessRomDevice(MaximInterface::SearchRomState& searchSta
 
 void OneWire_Service::ReadAndProcessDS18B20(OWDevice& device) {
     _logger->debug("Init DS18B20");
-    MaximInterface::SelectMatchRom rom(device._rom_id);
-    MaximInterface::DS18B20 dev(*_sleep.get(), *_master.get() , rom);
+    MaximInterfaceCore::SelectMatchRom rom(device._rom_id);
+    MaximInterfaceDevices::DS18B20 dev(*_sleep.get(), *_master.get() , rom);
     const auto result_init_dev = dev.initialize();
-    if (result_init_dev) {
-        _logger->error("DS18B20 device init error {}", result_init_dev.message());
+    if (!result_init_dev) {
+        _logger->error("DS18B20 device init error {}", result_init_dev.error().message());
         return;
     }
-    int measurement = 0;
     _logger->debug("Read temp DS18B20");
-    const auto result_read_temp = MaximInterface::readTemperature(dev, measurement);
-    if (result_read_temp) {
-        _logger->error("DS18B20 device error {}", result_read_temp.message());
+    const auto result_read_temp = MaximInterfaceDevices::readTemperature(dev);
+    if (!result_read_temp) {
+        _logger->error("DS18B20 device error {}", result_read_temp.error().message());
         return;
     }
-    const double temperature = measurement / 16.0;
+    const double temperature = result_read_temp.value() / 16.0;
     auto temp = json_object_new_array();
     json_object_array_add(temp, json_object_new_double(temperature));
     json_object_array_add(temp, json_object_new_string("°C"));
@@ -171,43 +177,43 @@ void OneWire_Service::main() {
     load_daemon_configuration();
     _logger->debug("Entered main");
 #if defined pigpio_FOUND
-    _i2c.reset(new MaximInterface::piI2CMaster());
+    _i2c.reset(new MaximInterfaceCore::piI2CMaster());
 #elif defined gpiocxx_FOUND
-    _i2c.reset(new MaximInterface::xxI2CMaster("/dev/i2c-1", _logger));
+    _i2c.reset(new MaximInterfaceCore::xxI2CMaster("/dev/i2c-1", _logger));
 #endif
     _i2c->start(_ow_driver_address);
     // right now we support only DS2482_100 but library (Maxim interface is able to support also DS2482_800 & DS2484
     // unfortunatly I don't have such devices so I decided not to write code to support them because I cant't verify if it works..
     // if someone have such devics we cand prepare working version to support also the other masters
-    _master.reset(new MaximInterface::DS2482_100(*_i2c.get(), _ow_driver_address));
+    _master.reset(new MaximInterfaceDevices::DS2482_100(*_i2c.get(), _ow_driver_address));
     const auto result_init_master = _master->initialize();
-    if (result_init_master) {
-        _logger->critical("Device init failed with error {}", result_init_master.message());
+    if (!result_init_master) {
+        _logger->critical("Device init failed with error {}", result_init_master.error().message());
         return;
     }
     _logger->trace("Device init OK");
-    MaximInterface::SearchRomState searchState;
+    MaximInterfaceCore::SearchRomState searchState;
     do {
-        const auto result_search_rom = MaximInterface::searchRom(*_master.get(), searchState);
-        if (result_search_rom) {
-            _logger->error("Device error {}", result_search_rom.message());
+        const auto result_search_rom = MaximInterfaceCore::searchRom(*_master.get(), searchState);
+        if (!result_search_rom) {
+            _logger->error("Device error {}", result_search_rom.error().message());
             break;
         }
-        if (MaximInterface::valid(searchState.romId)) {
+        if (MaximInterfaceCore::valid(searchState.romId)) {
             ProcessRomDevice(searchState);
         }
     } while (!searchState.lastDevice);
     _logger->trace("Rom Search Finshed");
     for (auto iterator = _devices.begin(); iterator != _devices.end(); ++iterator)
         if (!iterator->_found) {
-            _logger->warn("Device {} not found on I2C - removing it from list", MaximInterface::byteArrayToHexString(iterator->_rom_id.data(), 8) );
+            _logger->warn("Device {} not found on I2C - removing it from list", MaximInterfaceCore::toHexString(iterator->_rom_id));
             iterator = _devices.erase(iterator);
         }
     if (!_devices.size()) {
         _logger->warn("No device in devices list - terminating daemon - no reason to run");
         return;
     }
-    _sleep.reset(new MaximInterface::pigpio::Sleep());
+    _sleep.reset(new MaximInterface::Sleep());
 
     while(true) {
         auto now = std::chrono::steady_clock::now();
@@ -216,7 +222,9 @@ void OneWire_Service::main() {
             const double seconds_since_last_refresh = diff.count() / 1000000000.0;
             _logger->debug("Last refresh {} s", seconds_since_last_refresh);
             if (seconds_since_last_refresh > device._interval) {
-                switch (MaximInterface::familyCode(device._rom_id)) {
+                // TODO move this logic to proxy function
+                auto family_code = device._rom_id.front();
+                switch (family_code) {
                     case 0x28: {
                         device._last_refresh = now;
                         ReadAndProcessDS18B20(device);  // this takes some time ~ 1s
@@ -224,7 +232,7 @@ void OneWire_Service::main() {
                         break;
                     }
                     default: 
-                        _logger->critical("Unexpected device family!");  // this should never happen
+                        _logger->critical("Unexpected device family! {}", family_code);  // this should never happen
                         return;
                 }
             }

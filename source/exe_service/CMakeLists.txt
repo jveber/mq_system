@@ -8,15 +8,14 @@ set(sources
     mq_loslib.c
 )
 set_source_files_properties(mq_loslib.c PROPERTIES LANGUAGE CXX)
-
-add_executable(${target} ${sources} $<TARGET_OBJECTS:mq_lib>)
-target_link_libraries(${target} ${MOSQUITTO_LIBRARIES} ${JSON-C_LIBRARIES} ${SQLITE3_LIBRARIES} lualib ${CONFIG++_LIBRARY} pthread)
+add_executable(${target} ${sources})
+target_link_libraries(${target} ${MOSQUITTO_LIBRARIES} ${JSON-C_LIBRARIES} ${SQLITE3_LIBRARIES} lualib ${CONFIG++_LIBRARY} pthread $<TARGET_OBJECTS:mq_lib>)
 set_property(TARGET ${target} PROPERTY CXX_STANDARD 11)
 set_property(TARGET ${target} PROPERTY CMAKE_CXX_STANDARD_REQUIRED yes)
 if (${IPO_SUPPORTED})
 	set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
-
+target_compile_definitions(${target} PUBLIC "-DLUA_USE_POSIX")
 install(TARGETS ${target} RUNTIME DESTINATION /usr/local/bin)
 if (DAEMON_MANAGER EQUAL 1)
     install(FILES ${CMAKE_SOURCE_DIR}/data/${target} PERMISSIONS WORLD_EXECUTE DESTINATION /etc/init.d/ )
@@ -26,7 +25,7 @@ else()
     message(SEND_ERROR "Unsupported deamon manager")  # this should never happen
 endif()
 install(FILES ${CMAKE_SOURCE_DIR}/data/${target}.conf DESTINATION /etc/mq_system/ )
-cotire(${target}) #speed up if possible using cotire
+# cotire(${target}) #speed up if possible using cotire
 if (DAEMON_MANAGER EQUAL 1)
     add_custom_target(uninstall_${target}
 	    COMMAND rm -f /usr/local/bin/${target}

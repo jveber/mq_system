@@ -1,5 +1,5 @@
 // Copyright: (c) Jaromir Veber 2019
-// Version: 25032019
+// Version: 10122019
 // License: MPL-2.0
 // *******************************************************************************
 //  This Source Code Form is subject to the terms of the Mozilla Public
@@ -15,7 +15,7 @@
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
 
-i2cxx::i2cxx(const std::string& path, unsigned int i2c_addr, std::shared_ptr<spdlog::logger>& logger): _logger(logger), _addr(i2c_addr), _fd(-1) {
+i2cxx::i2cxx(const std::string& path, unsigned int i2c_addr, const std::shared_ptr<spdlog::logger>& logger): _logger(logger), _fd(-1), _addr(i2c_addr) {
     auto fd = open(path.c_str(), O_RDWR);
     if (fd < 0) {
         _logger->error("I2Cxx unable to open specified i2c device {} : {}", path, strerror(errno));
@@ -34,7 +34,7 @@ i2cxx::~i2cxx() noexcept {
         close(_fd);
 }
 
-int i2cxx::smbus_data(char rw, uint8_t cmd, int size, union i2c_smbus_data *data) {
+int i2cxx::smbus_data(char rw, uint8_t cmd, unsigned int size, union i2c_smbus_data *data) {
    struct i2c_smbus_ioctl_data args { rw, cmd, size, data };
    return ioctl(_fd, I2C_SMBUS, &args);
 }

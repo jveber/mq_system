@@ -30,7 +30,7 @@ endif()
 
 install(FILES ${CMAKE_SOURCE_DIR}/data/${target}.conf DESTINATION /etc/mq_system/)
 
-cotire(${target}) # only one source so this is may speedup for development but...
+#cotire(${target}) # only one source so this is may speedup for development but...
 
 if (DAEMON_MANAGER EQUAL 1)
     add_custom_target(uninstall_${target}
